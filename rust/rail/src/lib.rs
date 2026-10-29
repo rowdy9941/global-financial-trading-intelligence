@@ -6,6 +6,7 @@
 //!
 //! std-only at this stage. No `unwrap`/`panic` in library paths.
 
+pub mod ilp;
 pub mod wire;
 
 use std::time::{SystemTime, UNIX_EPOCH};

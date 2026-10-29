@@ -125,6 +125,22 @@ speed on the hot path); backfill/replay transports use the batched-flush
 `publish_batch` (fail-closed per batch). JetStream durable streams remain the
 next wire increment.
 
+## Pin 7 — D1 prep: QuestDB ILP writer (std-only `rail::ilp`)
+
+Landed 2026-10-29 so the D1 store gates can run immediately once the Docker
+daemon is up (`questdb:7` speaks ILP-over-TCP; no client crate, workspace policy
+held). Verified:
+
+| Gate | Command | Verbatim result |
+|---|---|---|
+| unit tests (wire+encode) | `cargo test -p rail` | `test result: ok. 8 passed; 0 failed` — incl. `encodes_and_delivers_exact_bytes_to_tcp` (fake TCP server, exact-byte assertions: framing newline, `%20`/`\'` escaping, epoch-micros stamp) |
+| lint | `cargo clippy --workspace -- -D warnings` | **0 errors, 0 warnings** |
+| encode bench (2 M rows, release) | `bench_ilp 2000000` | `{"rows":2000000,"ilp_ns_per_row_avg":639,"p50":584,"p99":1544,"p999":1951,"buf_push_ns_per_row":999,"rows_per_sec_equivalent":1564945}` + `flushed_rows=2000000 sink_bytes=245551273` (123 bytes/row ≈ ILP line length) |
+
+Read: ILP encode costs ≈639 ns/row (p99 1.5 µs) — the D1 TCP transport adds this
+on top of the 90 ns/row stamp. The real end-to-end D1 latency is only meaningful
+against the live daemon → measured at pin 2, not here. Nothing synthetic.
+
 ## Non-docker follow-ups queued this session
 
 - vault note types (decision · incident · runbook · research-digest · training-record)
