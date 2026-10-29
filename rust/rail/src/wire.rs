@@ -75,6 +75,23 @@ impl Nats {
         Ok(())
     }
 
+    /// Batched publish: stage `publish_no_flush` frames, then one PING flushes
+    /// the whole batch — NATS answers exactly one PONG per PING, so the single
+    /// PONG acks every frame in the batch (fail-closed at batch granularity).
+    /// For backfill/replay paths; the live rail keeps per-message acks.
+    pub fn publish_batch(&mut self, batch: &[(String, Vec<u8>)]) -> std::io::Result<()> {
+        for (subject, payload) in batch {
+            let head = format!("PUB {subject} {}\r\n", payload.len());
+            self.writer.write_all(head.as_bytes())?;
+            self.writer.write_all(payload)?;
+            self.writer.write_all(b"\r\n")?;
+        }
+        self.writer.write_all(b"PING\r\n")?;
+        self.buf.clear();
+        skip_to_pong(&mut self.reader, &mut self.writer)?;
+        Ok(())
+    }
+
     /// Blocking receive of the next message on the subscribed deliveries.
     /// Returns `(subject, payload)`. Responds to server PINGs with PONG.
     pub fn next_message(&mut self, subject_buf: &mut String, payload: &mut Vec<u8>) -> std::io::Result<()> {

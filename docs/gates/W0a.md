@@ -105,6 +105,26 @@ file size). Determinism gate caught a real parser mis-mapping while being built
 (bare-payload arrival field was bound to ts) — fixed pre-commit; the parse unit
 test now pins both input forms.
 
+## Pin 5c — Wire throughput: per-message ack vs batched-flush ack
+
+Measured 2026-10-29, release build, native nats-server v2.15.2 (producer-side,
+same server, same payload shape; fails closed at batch granularity):
+
+| Mode | Rows | Verbatim |
+|---|---|---|
+| per-msg ack (live-rail default) | 2,000 | `{"mode":"per","rows":2000,"total_ns":192953862,"ns_per_row":96476,"rows_per_sec":10365}` |
+| batch-64 ack | 2,000 | `{"mode":"batch","rows":2000,"total_ns":65886773,"ns_per_row":32943,"rows_per_sec":30355}` |
+| per-msg ack | 50,000 | `{"mode":"per","rows":50000,"total_ns":4763658862,"ns_per_row":95273,"rows_per_sec":10496}` |
+| batch-64 ack | 50,000 | `{"mode":"batch","rows":50000,"total_ns":1766121885,"ns_per_row":35322,"rows_per_sec":28310}` |
+| batch-1024 ack | 50,000 | `{"mode":"batch","rows":50000,"total_ns":1615075108,"ns_per_row":32301,"rows_per_sec":30958}` |
+
+Read: the per-row PING round-trip costs ≈63 µs of the ≈95 µs/msg producer cost.
+Batched flush (backfill/replay path) is **2.7–3.0× higher throughput**. Decision
+locked: live rail keeps per-message acks (fail-closed per row — correctness over
+speed on the hot path); backfill/replay transports use the batched-flush
+`publish_batch` (fail-closed per batch). JetStream durable streams remain the
+next wire increment.
+
 ## Non-docker follow-ups queued this session
 
 - vault note types (decision · incident · runbook · research-digest · training-record)
