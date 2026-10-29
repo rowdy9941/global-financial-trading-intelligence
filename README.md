@@ -8,7 +8,14 @@ in-depth plan with the complete visual diagrams** — the same 10 architecture p
 [FINOS-TRADING-PLAN.pdf](docs/plans/FINOS-TRADING-PLAN.pdf), embedded here with the
 full structures spelled out under each.
 
-> Status: **W0a not started** — plan locked (Sessions 1–47), repo seeded.
+> Status: **W0a in progress** (plan locked, Sessions 1–47) — MEASURED so far:
+> rail ingest contract 6/6 tests · std-only NATS client e2e 1,900/1,900 acked
+> (transit avg 220 µs · p99 1.37 ms) · fan-out proven on two filtered consumers ·
+> replay `cmp` byte-identical · hot-path bench **90 ns/row (p99 182 ns) ≈ 11.1 M
+> rows/s/core** · D0 Parquet cold store landed (deterministic byte-identical
+> dumps, read-back verified, **289 ns/row write ≈ 3.45 M rows/s**) — see
+> `docs/gates/W0a.md` for the verbatim outputs. Pins 1–2 (Compose stack) await
+> the host Docker daemon.
 > Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
 > **MEASURED** = real recorded output · unlabelled = a locked decision from the sessions.
 

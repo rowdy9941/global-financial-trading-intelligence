@@ -1,0 +1,24 @@
+[package]
+name = "d0"
+version = "0.1.0"
+edition.workspace = true
+
+# Dependency policy note (workspace rule: std-only until a gate forces a real crate).
+# D0 cold-store dump is a blueprint §13 requirement and MUST be Parquet (columnar,
+# compressed, schema-typed) — hand-rolling correct Parquet (thrift footer, RLE,
+# page headers) is a correctness risk, not an optimization. License checks done
+# via crates.io API, not-yanked verified:
+#   parquet 60.1.0    Apache-2.0
+#   arrow-array 60.1.0  Apache-2.0 AND MIT   (matches parquet's arrow 60 line)
+#   arrow-schema 60.1.0 Apache-2.0 AND MIT
+# These are linked ONLY into this crate; the hot-path rail crate stays
+# zero-dependency (see rail/Cargo.toml policy note).
+
+[dependencies]
+rail = { path = "../rail" }
+parquet = { version = "60.1.0", default-features = false, features = ["arrow", "snap"] }
+arrow-array = "60.1.0"
+arrow-schema = "60.1.0"
+
+[lints.rust]
+warnings = "deny"

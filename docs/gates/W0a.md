@@ -22,7 +22,7 @@ printing its own pass/fail JSON into this file.
 
 ## Pin 3 — R1 rail minimal loop (validate → as-of → rights-tag → publish → D0 dump)
 
-In progress. Core = `rust/rail` (workspace member). **Measured 2026-10-29:**
+In progress → core loop measured and dump landed (Pin 6). Core = `rust/rail` (workspace member). **Measured 2026-10-29:**
 
 | Check | Command | Result (verbatim tail) |
 |---|---|---|
@@ -58,13 +58,52 @@ overflow, E0106 lifetime signature, **MIN_TS floor misdated** (now 1.4e18 ns ≈
 
 ## Pin 4 — PIT replay harness CLI
 
-Not started. Produces: two replays of the same input file → two output files →
-`cmp` equality → line printed here.
+DONE 2026-10-29 (results recorded under Pin 3 above): two replays of the same
+2,000-row feed → `cmp replay1.out replay2.out` → **rc=0, byte-identical**.
 
 ## Pin 5 — G1 concurrency bench stub
 
-Not started. Produces: bench JSON (headroom headcount per SQL transport) into this
-file.
+DONE 2026-10-29 (results recorded under Pin 3 above): release-build 2 M-row bench
+JSON pasted verbatim. Remaining G1 scope: SQL-transport concurrency, multi-core
+fan-in.
+
+## Pin 5b — Fan-out semantics (D2 distribution proof)
+
+Measured 2026-10-29, native nats-server v2.15.2, two consumers started before the
+publisher on independent subject filters:
+
+| Consumer | Filter | Expected | Received (verbatim) |
+|---|---|---|---|
+| A | `market.spot.>` | all 1,900 | `WIRE-E2E {"received":1900,"n":1900,"transit_ns_avg":209803,"p50":155793,"p99":1363107}` |
+| B′ | `market.spot.NIFTY` (exact) | the 250 NIFTY rows only | `WIRE-E2E {"received":250,"n":250,"transit_ns_avg":280747,"p50":196109,"p99":1585528}` |
+
+Publisher: `rail: accepted=1900 rejected=100`; publisher's own `OK NIFTY` count =
+250 — B′ received exactly the rows it filtered (no leakage, no loss). Fan-out
+with independent filtering **proven at the wire level**.
+
+## Pin 6 — D0 Parquet cold-store dump (new crate `rust/d0`)
+
+Dependency landed with licence check (workspace policy): `parquet 60.1.0`
+(Apache-2.0) + `arrow-array`/`arrow-schema 60.1.0` (Apache-2.0 AND MIT) — all
+versions retrieved from the crates.io API, not-yanked verified, linked **only**
+into the d0 crate (rail stays std-only). Reason: cold tier must be specced
+Parquet; hand-rolling thrift-footer/RLE correctness is risk, not optimization.
+
+Measured 2026-10-29 (release build; input = the 2,000-row canonical feed):
+
+| Gate | Command | Verbatim result |
+|---|---|---|
+| dump determinism (×2) | `d0_dump --stdin d0a.parquet < replay1.out` ×2 → `cmp` | `D0 {"rows_written":1900,"rejected":100,"file_bytes":43469}` ×2, `cmp` **rc=0 — byte-identical Parquet** |
+| read-back proof | read_count after every write | row count parity enforced in code (wrote 1,900 → read 1,900) |
+| unit tests | `cargo test -p d0` | `test result: ok. 2 passed; 0 failed` |
+| write bench (100k rows) | `d0_dump --bench d0bench.parquet 100000` | `{"rows":100000,"rows_written":100000,"rows_read":100000,"file_bytes":1832480,"write_ns_per_row":535,"rows_per_sec":1868006,"ok":true}` |
+| write bench (1M rows) | `d0_dump --bench d0bench.parquet 1000000` | `{"rows":1000000,"rows_written":1000000,"rows_read":1000000,"file_bytes":13002157,"write_ns_per_row":289,"rows_per_sec":3448952,"ok":true}` |
+
+Read: hot-path stamp 90 ns/row vs cold-store persist 289 ns/row at batch size 1 M
+(~3.45 M rows/s/core, SNAPPY, 13.0 bytes/row before compression ratio shown as
+file size). Determinism gate caught a real parser mis-mapping while being built
+(bare-payload arrival field was bound to ts) — fixed pre-commit; the parse unit
+test now pins both input forms.
 
 ## Non-docker follow-ups queued this session
 
