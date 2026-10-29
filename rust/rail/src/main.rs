@@ -2,14 +2,23 @@
 //!
 //! Reads one whitespace-separated row per stdin line:
 //! `symbol ts_nanos price rights_class`
-//! Prints accepted rows in the stamped wire format; rejects with a reason code.
-//! This is the loop's ingest half; the publish half (NATS `market.*`) lands as
-//! soon as the foundation daemon is up (see docs/gates/W0a.md pin 1).
+//! Publishes stamped rows to `market.spot.<SYMBOL>` — fail-closed: if NATS is
+//! unreachable the rail exits non-zero rather than running silently detached.
 
-use rail::{stamp_row, RawRow};
+use rail::{stamp_row, wire::Nats, RawRow};
 use std::io::{self, BufRead, Write};
 
+const DEFAULT_NATS: &str = "nats://127.0.0.1:4222";
+
 fn main() {
+    let nats_url = std::env::var("RAIL_NATS_URL").unwrap_or_else(|_| DEFAULT_NATS.to_string());
+    let mut nats = match Nats::connect(&nats_url, "rail") {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("rail: FAIL-CLOSED — cannot reach bus {nats_url}: {e}");
+            std::process::exit(2);
+        }
+    };
     let stdin = io::stdin();
     let mut out = io::stdout().lock();
     let mut accepted: u32 = 0;
@@ -53,13 +62,26 @@ fn main() {
         };
         match stamp_row(&raw, arrival) {
             Ok(r) => {
-                writeln!(
-                    out,
-                    "OK {} ts={} arr={} price={} rights={:?}",
-                    r.symbol, r.ts_nanos, r.arrival_nanos, r.price, r.rights
-                )
-                .unwrap();
-                accepted += 1;
+                // The publish ack (PONG) is the rail's proof the bus took the
+                // row; only after that do we report OK.
+                match nats.publish(
+                    &format!("market.spot.{}", r.symbol),
+                    format!("{} {} {}", r.ts_nanos, r.arrival_nanos, r.price).as_bytes(),
+                ) {
+                    Ok(()) => {
+                        writeln!(
+                            out,
+                            "OK {} ts={} arr={} price={} rights={:?} pub=acked",
+                            r.symbol, r.ts_nanos, r.arrival_nanos, r.price, r.rights
+                        )
+                        .unwrap();
+                        accepted += 1;
+                    }
+                    Err(e) => {
+                        writeln!(out, "ERR publish-fail({e}) — not stamped live").unwrap();
+                        rejected += 1;
+                    }
+                }
             }
             Err(e) => {
                 writeln!(out, "ERR reject(reason={e:?})").unwrap();
@@ -68,4 +90,6 @@ fn main() {
         }
     }
     eprintln!("rail: accepted={accepted} rejected={rejected}");
+    // lint: keep process exit code success when loop drained
+    let _ = out.flush();
 }

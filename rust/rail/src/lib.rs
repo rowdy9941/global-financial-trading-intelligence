@@ -6,6 +6,8 @@
 //!
 //! std-only at this stage. No `unwrap`/`panic` in library paths.
 
+pub mod wire;
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Rights classes (D3 `source_registry.rights_class`). Unknown class ⇒ reject.
