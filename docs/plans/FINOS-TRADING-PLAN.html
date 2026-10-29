@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>FINOS TRADING PLAN</title>
+<style>
+/* finos.css — FINOS-TRADING-PLAN visual style (Session 47, 2026-10-29)
+   Style adopted from the owner's 6 reference images: pastel colored-band
+   architecture diagrams (image 1), layered runtime (image 2),
+   latency-banded execution path (image 4), streaming platform (image 5). */
+@page { size: A4; margin: 0; }
+* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+html { font-size: 10px; }
+body {
+  margin: 0; padding: 0;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  color: #1f2430;
+  background: #f7f6f2;
+}
+.page {
+  width: 210mm; height: 297mm;
+  padding: 14mm 13mm 12mm 13mm;
+  page-break-after: always;
+  background: #f7f6f2;
+  position: relative;
+  overflow: hidden;
+}
+.page:last-child { page-break-after: auto; }
+
+/* ---------- typography ---------- */
+.eyebrow {
+  font-size: 9px; letter-spacing: .22em; text-transform: uppercase;
+  color: #8a8578; margin: 0 0 2mm 0; font-weight: 600;
+}
+h1.doc-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 34px; line-height: 1.12; margin: 2mm 0 4mm 0; color: #14181f;
+}
+h2.page-title {
+  font-family: Georgia, serif; font-size: 22px; margin: 0 0 1mm 0; color: #14181f;
+}
+.page-sub { font-size: 10.5px; color: #5a5749; margin: 0 0 4mm 0; }
+h3 { font-size: 11.5px; margin: 3mm 0 1.5mm 0; }
+.small { font-size: 8.8px; color: #6b6754; }
+.footer {
+  position: absolute; bottom: 7mm; left: 13mm; right: 13mm;
+  font-size: 8px; color: #8a8578; border-top: 1px solid #ddd6c8;
+  padding-top: 2mm; display: flex; justify-content: space-between;
+}
+
+/* ---------- diagram system ---------- */
+.diagram {
+  border: 1.5px solid #d8d2c2; border-radius: 10px; background: #fbfaf6;
+  padding: 5mm; margin: 3mm 0;
+}
+.band-label {
+  font-size: 10px; font-weight: 700; letter-spacing: .06em; margin: 0 0 2mm 0;
+}
+.band-label .tick { display: inline-block; width: 4px; height: 11px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.band { display: flex; gap: 4mm; margin-bottom: 2mm; }
+.band.split { gap: 6mm; }
+.grow { flex: 1; }
+
+.box {
+  border: 1.5px solid; border-radius: 7px; padding: 2.2mm 2.8mm;
+  min-height: 9mm; background: #fff;
+}
+.box .bx-t { font-weight: 700; font-size: 10.5px; line-height: 1.25; }
+.box .bx-s { font-size: 8.2px; color: #6b6754; margin-top: 1mm; line-height: 1.3; }
+.box .bx-m { font-family: "DejaVu Sans Mono", Consolas, monospace; font-size: 7.8px; color: #544f3f; margin-top: 1mm; }
+
+/* band palettes (matching reference image 1) */
+.c-motion .tick { background: #8b5cf6; }
+.c-motion .box { background: #f3efff; border-color: #a78bfa; }
+.c-bus .tick { background: #10b981; }
+.c-bus .box { background: #e2faf0; border-color: #34d399; }
+.c-rest .tick { background: #ca8a04; }
+.c-rest .box { background: #fdf7d8; border-color: #d9a441; }
+.c-insight .tick { background: #e11d48; }
+.c-insight .box { background: #ffeaef; border-color: #f38da6; }
+.c-action .tick { background: #0891b2; }
+.c-action .box { background: #dff7fb; border-color: #4ec3da; }
+.c-neutral .tick { background: #6b6754; }
+.c-neutral .box { background: #f4f2ea; border-color: #b9b3a2; }
+.c-warm .tick { background: #d97706; }
+.c-warm .box { background: #fdf3e3; border-color: #eab676; }
+.c-cold .tick { background: #4f46e5; }
+.c-cold .box { background: #eef0ff; border-color: #9aa3f5; }
+.c-hot .tick { background: #dc2626; }
+.c-hot .box { background: #ffeceb; border-color: #f1998f; }
+
+.arrowrow {
+  text-align: center; font-size: 11px; color: #57534e; margin: 1mm 0;
+  font-weight: 600; letter-spacing: .08em;
+}
+.arrowrow .lbl { font-size: 8px; color: #8a8578; font-weight: 400; margin-left: 4px; }
+.flowarrow { color: #57534e; }
+
+/* chips */
+.chips { display: flex; flex-wrap: wrap; gap: 2.5mm; margin: 2mm 0; }
+.chip {
+  border: 1px solid #b9b3a2; border-radius: 999px; padding: 1mm 2.8mm;
+  font-size: 8.4px; background: #fff; color: #443f31; font-weight: 600;
+}
+.chip.hot { border-color: #f1998f; background: #ffeceb; }
+.chip.warm { border-color: #eab676; background: #fdf3e3; }
+.chip.cold { border-color: #9aa3f5; background: #eef0ff; }
+
+/* small tables inside pages */
+table.mini { border-collapse: collapse; width: 100%; margin: 2mm 0; font-size: 8.8px; }
+table.mini th, table.mini td { border: 1px solid #d8d2c2; padding: 1.2mm 2mm; text-align: left; vertical-align: top; }
+table.mini th { background: #efede4; font-weight: 700; }
+
+/* ladder (vertical promotion stages) */
+.ladder { display: flex; flex-direction: column; gap: 1.6mm; }
+.rung {
+  display: flex; align-items: center; gap: 3mm;
+  border: 1.5px solid; border-radius: 6px; padding: 1.6mm 3mm; background: #fff;
+}
+.rung .rn { font-weight: 700; font-size: 9.5px; width: 34mm; flex-shrink: 0; }
+.rung .rd { font-size: 8.4px; color: #57534e; }
+.dn {
+  text-align: center; color: #a8a29e; font-size: 9px; margin: 0.2mm 0;
+}
+
+/* cover stats */
+.statrow { display: flex; gap: 4mm; margin: 5mm 0; }
+.stat {
+  flex: 1; border: 1.5px solid #d8d2c2; border-radius: 8px; background: #fbfaf6;
+  padding: 3mm; text-align: center;
+}
+.stat .n { font-family: Georgia, serif; font-size: 24px; color: #14181f; }
+.stat .d { font-size: 8.2px; color: #6b6754; margin-top: 1mm; line-height: 1.3; }
+
+/* wave bars (timeline) */
+.wavebar { display: flex; align-items: center; gap: 2.5mm; margin: 1.5mm 0; }
+.wavebar .wn { width: 16mm; font-weight: 700; font-size: 9px; text-align: right; flex-shrink: 0; }
+.wavebar .bar {
+  height: 8mm; border: 1.5px solid; border-radius: 5px; padding: 1mm 2.4mm;
+  font-size: 8.2px; line-height: 1.25; display: flex; align-items: center;
+}
+
+ul.tight { margin: 1mm 0 1mm 4mm; padding: 0; }
+ul.tight li { font-size: 9px; margin: 0.8mm 0; }
+
+</style>
+</head>
+<body>
+
+<!-- ================= PAGE 1 · COVER / MASTER MAP ================= -->
+<section class="page">
+  <p class="eyebrow">GFI · Session 47 · 2026-10-29</p>
+  <h1 class="doc-title">FINOS — the financial trading plan<br>of the whole system, in one picture plane</h1>
+  <p class="page-sub">The trading stack (Row 3 of the ecosystem) end to end: data in → stores → engines → governed execution → ledger, with the LLM cockpit layer wired around it. Every number is a locked decision from Sessions 1–46; labels: ESTIMATE = to measure at its gate · MEASURED = on record.</p>
+
+  <div class="statrow">
+    <div class="stat"><div class="n">75</div><div class="d">research brains (owner said "73" — old symbols×1-style count; roster source of truth is 75)</div></div>
+    <div class="stat"><div class="n">480–545</div><div class="d">executor cells ceiling (built only when E4 promotes a style; ≤75 active at once)</div></div>
+    <div class="stat"><div class="n">12</div><div class="d">LLM seats in the cockpit — decide-and-explain, never the hot path (R3)</div></div>
+    <div class="stat"><div class="n">&lt;5 ms</div><div class="d">internal order-path budget; venue RTT dominates (R8 honesty)</div></div>
+  </div>
+
+  <div class="diagram">
+    <p class="band-label">Master architecture — three rows, one rail</p>
+    <div class="band">
+      <div class="box grow c-neutral"><div class="bx-t">Row 1 · public content</div><div class="bx-s">Terminal · News portal · Media hub — built LAST, consumes engines only, never feeds back (rights firewall)</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">reads engines (one-way)</span></div>
+    <div class="band">
+      <div class="box grow c-bus"><div class="bx-t">Row 2 · shared intelligence foundation</div><div class="bx-m">collect once, reuse many · registry · schemas · provenance · quality · bus · APIs · rights · Financial + News + World engines</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">feeds</span></div>
+    <div class="band">
+      <div class="box c-hot"><div class="bx-t">FinOS — this plan</div><div class="bx-s">the trading stack: rail · engines E1–E7 · governed cells</div></div>
+      <div class="box c-insight grow"><div class="bx-t">Cockpit — LLM layer</div><div class="bx-s">12 seats · memory · approvals · chat with owner</div></div>
+      <div class="box c-neutral"><div class="bx-t">World Monitor</div><div class="bx-s">LAST of all</div></div>
+    </div>
+  </div>
+
+  <h3>Non-negotiable invariants printed on every following page</h3>
+  <div class="chips">
+    <span class="chip">R1 collect once / reuse many</span><span class="chip">R2 rights firewall at boundary</span>
+    <span class="chip hot">R3 no LLM in fast paths</span><span class="chip">R4 PIT + survivorship</span>
+    <span class="chip">R5 provenance everywhere</span><span class="chip">R6 versioned contracts</span>
+    <span class="chip">R7 train→eval→paper→approve→deploy</span><span class="chip">R8 venue RTT dominates</span>
+    <span class="chip warm">G1–G6 fleet guards</span><span class="chip hot">L0–L4 kill cascade + out-of-band kill</span>
+  </div>
+  <div class="footer"><span>FINOS-TRADING-PLAN · .md + .html + .pdf rendered from the same content</span><span>page 1 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 2 · DATA PIPELINE ================= -->
+<section class="page">
+  <p class="eyebrow">Page 2 · the data plane</p>
+  <h2 class="page-title">Data pipeline — in motion · at rest · at insight · at action</h2>
+  <p class="page-sub">Same plane as the reference "Data Pipeline" layout: everything flows over one bus; every store has exactly one job.</p>
+
+  <div class="diagram">
+    <p class="band-label c-motion"><span class="tick"></span>Data in motion — collectors rail (R1)</p>
+    <div class="band">
+      <div class="box grow"><div class="bx-t">Venue feeds</div><div class="bx-s">Upstox (NSE/BSE WS+SSE) · cTrader Open API (FX ECN) · Hyperliquid (perps) · tick+, depth for FX Team 2 + crypto later</div></div>
+      <div class="box grow"><div class="bx-t">News &amp; world</div><div class="bx-s">news collectors (B1, W0b–W1) · world structured daily/1-min · T3 pin-to-pin only per research need — never blanket</div></div>
+      <div class="box grow"><div class="bx-t">Reference &amp; filings</div><div class="bx-s">bhavcopy, filings, calendars, fundamentals PIT-as-reported (O12 open) — registry rows carry license class + verify state</div></div>
+    </div>
+    <div class="arrowrow">▼ validate · as-of stamp · rights-tag — R1 rail (Rust)<span class="lbl">single writer to stores</span></div>
+
+    <p class="band-label c-bus"><span class="tick"></span>The bus</p>
+    <div class="band">
+      <div class="box grow c-bus"><div class="bx-t">NATS JetStream — real-time streaming &amp; messaging (D2)</div><div class="bx-m">market.* · signal.* · order.* · risk.* · ledger.* · seat.* — queue-groups = load balance · durable consumers = replay · partitioned per-key ordering</div></div>
+    </div>
+    <div class="arrowrow">▼ ▼ ▼ ▼<span class="lbl">fan-out</span></div>
+
+    <p class="band-label c-rest"><span class="tick"></span>Data at rest — the store ladder</p>
+    <div class="band">
+      <div class="box grow c-rest"><div class="bx-t">D0 · Parquet lake</div><div class="bx-s">years of archive on NVMe + offsite object (16-TB target accepted S43) · research scans, replay, backfills</div></div>
+      <div class="box grow c-rest"><div class="bx-t">D1 · QuestDB (warm)</div><div class="bx-s">live window only · E1 pre-warm, PIT replay · final §19; ClickHouse fallback if W0a gate fails twice</div></div>
+      <div class="box grow c-rest"><div class="bx-t">D3 · Postgres (reference)</div><div class="bx-s">registry · schemas · provenance · rights classes · symbols · calendars · cost model · limits · llm_tasks</div></div>
+      <div class="box grow c-rest"><div class="bx-t">D4 · Postgres (ledger)</div><div class="bx-s">append-only role · fills / P&amp;L / slippage / G4 trials · ≥5 yr (R13) · no UPDATE/DELETE grants</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">nightly D0/D1 → D6 · research reads columnar only</span></div>
+
+    <p class="band-label c-insight"><span class="tick"></span>Data at insight — offline (never the hot path)</p>
+    <div class="band">
+      <div class="box grow c-insight"><div class="bx-t">D6 · DuckDB research scans</div><div class="bx-s">vectorized replay for Mode R · one process rule</div></div>
+      <div class="box grow c-insight"><div class="bx-t">E4 gate stack</div><div class="bx-s">E4-SIM swarm (10⁴ worlds) · E4-BT vectorized + event · E4-WF CPCV · DSR ≥ 0.95 · crisis replay</div></div>
+      <div class="box grow c-insight"><div class="bx-t">Scoring + research seats</div><div class="bx-s">cited artifacts (quant-mind contract) · D5 candidate prep · 10³ candidates/style cap</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">owner approval ≤5/week (C8) → D5 signed</span></div>
+
+    <p class="band-label c-action"><span class="tick"></span>Data at action</p>
+    <div class="band">
+      <div class="box c-action"><div class="bx-t">E5 governor</div><div class="bx-s">deterministic: stops · size caps · news ladder · kill-switch</div></div>
+      <div class="box c-action"><div class="bx-t">E6 execution</div><div class="bx-s">PAPER · SHADOW (zero order authority) · LIVE adapters</div></div>
+      <div class="box c-action"><div class="bx-t">E7 ledger</div><div class="bx-s">fills vs expected · D4 async writes</div></div>
+      <div class="box c-action"><div class="bx-t">Cockpit</div><div class="bx-s">L0–L3 approvals · monitor surfaces · chat</div></div>
+    </div>
+  </div>
+  <div class="footer"><span>store rules: hot path never queries a store per tick · cold in D0, warm in D1, hot in RAM, truth in D3/D4/D5</span><span>page 2 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 3 · LANGUAGE/RUNTIME LAYERS ================= -->
+<section class="page">
+  <p class="eyebrow">Page 3 · the runtime stack</p>
+  <h2 class="page-title">Three runtime layers — Rust kernel · Python edge · LLM seat layer</h2>
+  <p class="page-sub">Same plane as the reference "Python/Rust/C++" layout, mapped to our locked parts. Contracts (§3.3 of the blueprint) are the only crossings.</p>
+
+  <div class="diagram">
+    <div class="band">
+      <div class="box grow c-bus">
+        <div class="bx-t">Python layer — research &amp; gates (edge)</div>
+        <div class="bx-s">Mode R stack · nightly only</div>
+        <div class="bx-m">research/ (PySR · MAPIE · arch · sklearn · PyTorch · SB3) · gates/ (E4: CPCV, DSR, crisis replay, E4-SIM NumPy/Numba) · seats/ (LLM runtimes) · tools/</div>
+      </div>
+      <div class="box grow c-hot">
+        <div class="bx-t">Rust layer — the kernel (hot path)</div>
+        <div class="bx-s">edition 2024 · no framework in the hot path</div>
+        <div class="bx-m">rail/ (R1 validate·as-of·rights) · featurize/ (E1 pre-warmed) · evaluate/ (E2 frozen-artifact evaluator) · govern/ (E5) · exec/ (E6 scheduler + adapters) · ledger/ (E7)</div>
+      </div>
+      <div class="box grow c-insight">
+        <div class="bx-t">LLM seat layer — cockpit (R3: never the hot path)</div>
+        <div class="bx-s">12 seats · approval-bridge L0–L3</div>
+        <div class="bx-m">build · review · cybersec · data-QA · news · research · scoring · ops · fleet-control · training · compliance · cockpit/comm · brigade loop-guards + ruflo DAG ports</div>
+      </div>
+    </div>
+    <div class="arrowrow">⇄ ⇄ ⇄<span class="lbl">the five contracts: storage · research · artifact · execution · audit (versioned, R6)</span></div>
+    <div class="band">
+      <div class="box grow c-neutral"><div class="bx-t">Venue connectors — feeds in</div><div class="bx-m">Upstox: WS + REST + algo-tag O9 · cTrader: Open API (ECN, NY4 lane planned W3) · Hyperliquid: public API now, node option W4–W5 · world/news: connectors B1</div></div>
+      <div class="box grow c-neutral"><div class="bx-t">Venue connectors — orders out (E6 adapters only)</div><div class="bx-m">idempotent client order IDs · reconcile-before-orders on restart · per-venue ban checks in E5</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">data flow legend</span></div>
+    <div class="band">
+      <div class="box grow c-action"><div class="bx-t">Low-latency flow (solid)</div><div class="bx-s">venue → R1 → JetsStream fan-out → cell in-process E1→E2→E5→E6 → venue — all in-proc Rust + pre-serialized templates; nothing crosses a store mid-tick</div></div>
+      <div class="box grow c-cold"><div class="bx-t">Offline flow (dashed)</div><div class="bx-s">D0/D6 → research (Mode R) → E4 gates → owner → D5 signed → E2 loads at boot — minutes-to-days, by design</div></div>
+    </div>
+  </div>
+
+  <h3>Adopt-vs-build, one line each</h3>
+  <table class="mini">
+    <tr><th>Build (no OSS substitute)</th><td>R1 rail · E1 · E2 · E5 · E6 adapters · E7 + cost model · D5/G4 · PIT replay · rights firewall · cockpit layer</td></tr>
+    <tr><th>Adopt (license-checked)</th><td>Parquet · QuestDB · NATS · Postgres · DuckDB · PySR · MAPIE · arch · sklearn/PyTorch/SB3 · Nautilus behind the E6 interface · Graphify (local tool)</td></tr>
+    <tr><th>Patterns ported from the 13 repos</th><td>brigade loop-guards/approval/cron · ruflo DAG · agency personas · day-trader checks · quant-mind citation schema · Vibe anti-fabrication · timecopilot stub-gate</td></tr>
+  </table>
+  <div class="footer"><span>Rust⇄Python boundary is a monorepo wall: mani/rust/* vs mani/python/* — contracts across, no shared runtime</span><span>page 3 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 4 · EXECUTION PATH / LATENCY BANDS ================= -->
+<section class="page">
+  <p class="eyebrow">Page 4 · the order path</p>
+  <h2 class="page-title">Execution path with latency bands — hot · warm · cold</h2>
+  <p class="page-sub">Same plane as the reference hot/warm/cold trading layout. Latency budgets are ESTIMATE until each gate measures them into D3 dashboards.</p>
+
+  <div class="chips">
+    <span class="chip hot">HOT &lt;1 ms decision · ≤ ~2 ms R1→cell fan-out P99 (W0b)</span>
+    <span class="chip warm">WARM ms-class D1 reads — boot/replay/dashboards only</span>
+    <span class="chip cold">COLD seconds–minutes research · seat tasks async by design</span>
+  </div>
+
+  <div class="diagram">
+    <p class="band-label c-neutral"><span class="tick"></span>Market data in — (~ms network)</p>
+    <div class="band">
+      <div class="box grow c-motion"><div class="bx-t">Upstox · NSE/BSE</div><div class="bx-s">WS + SSE · options TICKER only</div></div>
+      <div class="box grow c-motion"><div class="bx-t">cTrader · ECN</div><div class="bx-s">7 pairs + 4 commodities · scalping feed = tick+depth</div></div>
+      <div class="box grow c-motion"><div class="bx-t">Hyperliquid</div><div class="bx-s">BTC/ETH/HYPE perps</div></div>
+      <div class="box grow c-motion"><div class="bx-t">News / world rail (B1)</div><div class="bx-s">async to the tick path</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">R1 rail: validate · as-of · rights-tag</span></div>
+
+    <div class="band">
+      <div class="box c-hot"><div class="bx-t">HOT PATH — trading EC2-class kernel</div>
+        <div class="bx-s">Risk first, always:</div>
+        <div class="bx-m">E5 governor — pre-trade size/limits/spread/news-ladder · E1 features (pre-warmed RAM) · E2 frozen-artifact evaluator · circuit daily kill-switch</div></div>
+      <div class="box c-warm"><div class="bx-t">WARM PATH — OMS-class</div>
+        <div class="bx-m">E6 order state machine · lifecycle · ephemeral-replay · position reconciler (reconcile-before-orders invariant) · D4 position ledger (post-settlement writes)</div></div>
+    </div>
+    <div class="arrowrow">→ order events ▼<span class="lbl">E1→E5→E6→wire &lt;5 ms internal (R8); venue RTT dominates</span></div>
+
+    <p class="band-label c-action"><span class="tick"></span>Venues — with RTT labels (vendor-claims labeled)</p>
+    <div class="band">
+      <div class="box grow c-action"><div class="bx-t">Upstox</div><div class="bx-s">~45 ms round trip (vendor-claim, unaware) · algo-tag digit pending O9</div></div>
+      <div class="box grow c-action"><div class="bx-t">cTrader GA-routed</div><div class="bx-s">NY4 lane planning at W3 · prod limits O8 (500/min is demo)</div></div>
+      <div class="box grow c-action"><div class="bx-t">Hyperliquid</div><div class="bx-s">~600–700 ms public API (MEASURED public figure) · node option at W4–W5</div></div>
+    </div>
+    <div class="arrowrow">▼ fills async</div>
+
+    <p class="band-label c-rest"><span class="tick"></span>Settlement of truth — Postgres / QuestDB + off-graph stores</p>
+    <div class="band">
+      <div class="box grow c-rest"><div class="bx-t">D4 append-only</div><div class="bx-s">fills · slippage · G4 trials · audit — the only history that matters</div></div>
+      <div class="box grow c-rest"><div class="bx-t">D1 QuestDB</div><div class="bx-s">warm window · PIT replay evidence</div></div>
+      <div class="box grow c-cold"><div class="bx-t">COLD PATH — overnight</div><div class="bx-s">G4 research + strategy library · E3 training (Colab T4 verified lane) · feature store + model registry in D5</div></div>
+    </div>
+  </div>
+  <div class="footer"><span>scheduled jobs at 00:00/00:15 UTC · full replay of any decision on demand — the flight-recorder property</span><span>page 4 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 5 · EVENT/STREAMING PLATFORM ================= -->
+<section class="page">
+  <p class="eyebrow">Page 5 · the wire</p>
+  <h2 class="page-title">Streaming platform — sources → bus → consumers → outputs</h2>
+  <p class="page-sub">Same plane as the reference "Event/Data Streaming Platform". Exactly five transports in the whole system — anything else is a design bug.</p>
+
+  <div class="diagram">
+    <p class="band-label c-motion"><span class="tick"></span>Data sources → producers</p>
+    <div class="band">
+      <div class="box grow c-neutral"><div class="bx-t">Sources</div><div class="bx-m">venue feeds · filings/statistics (stats/reporting) · news endpoints · world datasets (datasets CDC-style refresh) · APIs/webhooks</div></div>
+      <div class="box grow c-motion"><div class="bx-t">Producers = B1 collectors</div><div class="bx-s">one row of the 1,114-row TODO each · producer-N scale-out pattern · every publish as-of+rights stamped</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">API gateway analog: cockpit L0–L3 approval bridge (auth before any action that matters)</span></div>
+
+    <p class="band-label c-bus"><span class="tick"></span>Core streaming platform — NATS JetStream (D2)</p>
+    <div class="band">
+      <div class="box grow c-bus"><div class="bx-t">Message bus</div><div class="bx-m">JetStream durable + at-least-once + exactly-once de-dup on client IDs · subject tree market.*/signal.*/order.*/risk.*/ledger.*/seat.*</div></div>
+      <div class="box grow c-bus"><div class="bx-t">Event store / log</div><div class="bx-s">durable streams = replayable history · every cell can rebuild state from the log</div></div>
+      <div class="box grow c-bus"><div class="bx-t">Schema registry analog</div><div class="bx-s">the five contracts (versioned R6) — enforced at publish, not by trust</div></div>
+      <div class="box grow c-bus"><div class="bx-t">Security layer</div><div class="bx-s">rights firewall at the R1 boundary · no secrets in configs · append-only DB roles</div></div>
+      <div class="box grow c-bus"><div class="bx-t">Observability</div><div class="bx-m">per-hop metrics · flight-recorder traces · G2 dashboards · G9 token burn</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">subscribe / queue-groups</span></div>
+
+    <p class="band-label c-insight"><span class="tick"></span>Consumers</p>
+    <div class="band">
+      <div class="box grow c-insight"><div class="bx-t">Mode-T cells (the hands)</div><div class="bx-s">≤75 active · one per symbol × style</div></div>
+      <div class="box grow c-insight"><div class="bx-t">LLM seats</div><div class="bx-s">seat.* subjects + llm_tasks queue</div></div>
+      <div class="box grow c-insight"><div class="bx-t">E7 ledger·dashboards</div><div class="bx-s">D4 writer · G2 surfaces</div></div>
+    </div>
+    <div class="arrowrow">▼</div>
+    <p class="band-label c-action"><span class="tick"></span>Destinations</p>
+    <div class="band">
+      <div class="box grow c-action"><div class="bx-t">D0/D1 stores</div><div class="bx-s">archive + warm</div></div>
+      <div class="box grow c-action"><div class="bx-t">Cockpit</div><div class="bx-s">chat · approvals · monitor</div></div>
+      <div class="box grow c-action"><div class="bx-t">Owner mobile</div><div class="bx-s">out-of-band kill + status</div></div>
+      <div class="box grow c-action"><div class="bx-t">Digest → vault</div><div class="bx-s">weekly auto-write</div></div>
+    </div>
+  </div>
+
+  <h3>The five transports (and nothing else)</h3>
+  <table class="mini">
+    <tr><th>1 · NATS subjects</th><td>the live wire — µs–ms fan-out, load-balance, durable replay</td></tr>
+    <tr><th>2 · Files</th><td>D0/D5 — single-writer discipline</td></tr>
+    <tr><th>3 · SQL</th><td>D1/D3/D4 concurrent servers (headroom = G1 bench)</td></tr>
+    <tr><th>4 · Embedded DuckDB</th><td>single D6 process — never critical path</td></tr>
+    <tr><th>5 · In-proc calls</th><td>E1/E4 workers — µs-class, inside one kernel process</td></tr>
+  </table>
+  <div class="footer"><span>proton JetStream-MV streaming views = W2 trial layer on top, NOT a D1 change</span><span>page 5 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 6 · ENGINE LADDER ================= -->
+<section class="page">
+  <p class="eyebrow">Page 6 · engines</p>
+  <h2 class="page-title">The engine stack E1–E7 — and the candidate ladder</h2>
+  <p class="page-sub">A candidate rides the same ladder at every rung with the same signed artifact and the same E1 code — bit-for-bit, or it doesn't move.</p>
+
+  <div class="diagram">
+    <div class="band">
+      <div class="box grow c-hot"><div class="bx-t">E1 · featurize</div><div class="bx-s">bars · ticks · Greeks · indicators · microstructure — Rust, pre-warmed RAM at boot</div></div>
+      <div class="box grow c-hot"><div class="bx-t">E2 · evaluate</div><div class="bx-s">frozen-artifact evaluator each tick · compiled formulas / ONNX</div></div>
+      <div class="box grow c-hot"><div class="bx-t">E5 · govern</div><div class="bx-s">zero ML — deterministic or nothing</div></div>
+    </div>
+    <div class="band">
+      <div class="box grow c-neutral"><div class="bx-t">E3 · train (offline)</div><div class="bx-s">SB3/PyTorch wrapper · nightly · Colab T4 verified lane</div></div>
+      <div class="box grow c-insight"><div class="bx-t">E4 · THE gate</div><div class="bx-s">E4-SIM 10⁴ worlds · E4-BT vectorized+event · E4-WF CPCV · DSR ≥ 0.95 · crisis replay</div></div>
+      <div class="box grow c-action"><div class="bx-t">E6 · execute</div><div class="bx-s">PAPER / SHADOW (zero order authority) / LIVE adapters — the only engine that ever sends an order</div></div>
+      <div class="box grow c-action"><div class="bx-t">E7 · ledger</div><div class="bx-s">fills vs expected · slippage curves → D4</div></div>
+    </div>
+  </div>
+
+  <h3>One candidate's life — top to bottom</h3>
+  <div class="ladder">
+    <div class="rung c-cold"><span class="rn">1 · E4-SIM</span><span class="rd">10⁴ deterministic simulated worlds · seed + param-hash replay · minutes</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-cold"><span class="rn">2 · E4-BT vectorized</span><span class="rd">fast screening over D6/DuckDB · seconds</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-cold"><span class="rn">3 · E4-BT event-driven</span><span class="rd">fill model: feed latency, order latency, queue position (hftbacktest checklist)</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-insight"><span class="rn">4 · E4-WF walk-forward</span><span class="rd">CPCV purge = label horizon + embargo · day-grouped folds across symbols · untouched final holdout · DSR ≥ 0.95 vs decorrelated trials · crisis replay (EOD index-option history)</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-warm"><span class="rn">5 · E6-PAPER</span><span class="rd">real hot path, simulated fills · days</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-warm"><span class="rn">6 · E6-SHADOW</span><span class="rd">real data · zero order authority (physically) · 3–6 months</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-hot"><span class="rn">7 · Owner gate</span><span class="rd">≤5 approvals/week (C8) · L2/L3 card in the cockpit</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-action"><span class="rn">8 · D5 signed → LIVE</span><span class="rd">artifact signed into D5 · Mode T loads at next boot · E7 watches decay</span></div>
+    <div class="dn">▼</div>
+    <div class="rung c-neutral"><span class="rn">9 · Monitor / retrain / retire</span><span class="rd">rolling IC · PSI/edge decay triggers retrain — never raw PSI (C9) · retirement = per-cell, owner-approved, G4 lineage</span></div>
+  </div>
+  <div class="footer"><span>self-upgrade ceiling: "upgrade" always means a NEW frozen artifact through this full ladder — never a live code rewrite (G1)</span><span>page 6 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 7 · WORKFORCES ================= -->
+<section class="page">
+  <p class="eyebrow">Page 7 · the teams</p>
+  <h2 class="page-title">The workforces — fleet and cockpit, and how they loop together</h2>
+  <p class="page-sub">"One team of agents": the deterministic fleet executes and proves; the LLM seats decide and explain; the gates say who goes live.</p>
+
+  <div class="diagram">
+    <p class="band-label c-hot"><span class="tick"></span>The non-LLM fleet (the hands)</p>
+    <div class="band">
+      <div class="box grow c-rest"><div class="bx-t">Stocks ≤ 59</div><div class="bx-s">NIFTY + SENSEX + optionable weight names · options BUYING only, same-day · 8–9 styles/symbol · rule ladder 1–6 + kill</div></div>
+      <div class="box grow c-rest"><div class="bx-t">FX Team 1 · 11 symbols</div><div class="bx-s">3 styles/pair (session · carry · news) · cascade-flatten · weekend-gap · funding-window · kill</div></div>
+      <div class="box grow c-rest"><div class="bx-t">FX Team 2 · 2 symbols</div><div class="bx-s">XAU/USD + WTI · pure scalping push-mode · separate account · session-closed flat</div></div>
+      <div class="box grow c-rest"><div class="bx-t">Crypto · 3 symbols</div><div class="bx-s">funding · liquidation · weekend · PAIR stat-arb · 5-liquidity-gate exit · kill</div></div>
+    </div>
+    <div class="arrowrow">▲▼<span class="lbl">state up · commands down — NATS subjects + D3 cell-registry</span></div>
+
+    <p class="band-label c-insight"><span class="tick"></span>The LLM cockpit (12 seats — all R3)</p>
+    <div class="band">
+      <div class="box c-insight"><div class="bx-t">build</div><div class="bx-s">code + tests</div></div>
+      <div class="box c-insight"><div class="bx-t">review</div><div class="bx-s">PR gate</div></div>
+      <div class="box c-insight"><div class="bx-t">cybersec</div><div class="bx-s">egress · secrets</div></div>
+      <div class="box c-insight"><div class="bx-t">data-QA</div><div class="bx-s">gap tickets</div></div>
+      <div class="box c-insight"><div class="bx-t">news</div><div class="bx-s">digest + ladder</div></div>
+      <div class="box c-insight"><div class="bx-t">research</div><div class="bx-s">citations required</div></div>
+      <div class="box c-insight"><div class="bx-t">scoring</div><div class="bx-s">E2 edge-lift gate</div></div>
+      <div class="box c-insight"><div class="bx-t">ops</div><div class="bx-s">incident narration</div></div>
+      <div class="box c-insight"><div class="bx-t">fleet-ctl</div><div class="bx-s">state map</div></div>
+      <div class="box c-insight"><div class="bx-t">training</div><div class="bx-s">G4 runs</div></div>
+      <div class="box c-insight"><div class="bx-t">compliance</div><div class="bx-s">R9–R14</div></div>
+      <div class="box c-hot"><div class="bx-t">cockpit/comm</div><div class="bx-s">chat with owner</div></div>
+    </div>
+    <div class="arrowrow">▲▼<span class="lbl">findings/PRs/approval cards — never market writes outside L0–L3, never frozen-artifact edits without E4</span></div>
+
+    <p class="band-label c-neutral"><span class="tick"></span>The ten operating loops (the heartbeat)</p>
+    <div class="band">
+      <div class="box grow c-neutral"><div class="bx-m">build · fix-bug · promote · research · news · data-QA · ops/kill · train · monitor · self-learn — each loop: trigger → seat → fleet action → gated output; nothing a seat says becomes live without a gate (E4/E2, DSR, L0–L3)</div></div>
+    </div>
+  </div>
+
+  <h3>Swarm agents — both kinds</h3>
+  <table class="mini">
+    <tr><th>Fleet swarm</th><td>E4-SIM: 10⁴ deterministic worlds for any strategy question — vectorized NumPy/Numba, seed+param-hash replay</td></tr>
+    <tr><th>LLM crew swarm</th><td>multi-seat missions on a ruflo-port DAG — crew.yaml: roster · depends_on · tool whitelist · budget cap · approval lid · CI-linted</td></tr>
+    <tr><th>Cross-cell swarms</th><td>any new style tested against existing cells' exposure in sim before a merge lands</td></tr>
+  </table>
+  <div class="footer"><span>G5: exactly one active style per symbol · G1: cells can't edit their own artifacts · G3: research can't place orders</span><span>page 7 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 8 · MEMORY + GOVERNANCE ================= -->
+<section class="page">
+  <p class="eyebrow">Page 8 · memory &amp; control</p>
+  <h2 class="page-title">Every agent's memory — and the control plane that keeps it safe</h2>
+  <p class="page-sub">Write authority is enforced at the DB-role level, not by prose. The kill always works without the app.</p>
+
+  <div class="diagram">
+    <p class="band-label c-cold"><span class="tick"></span>Memory matrix — fleet and seats side by side</p>
+    <div class="band">
+      <div class="box grow c-cold"><div class="bx-t">Fleet (75 brains / 480–545 hands)</div>
+        <div class="bx-m">working → cell process state (tick/feature/position/DD)</div>
+        <div class="bx-m">episodic → E7 ledger + G4 trial log + shadow history</div>
+        <div class="bx-m">semantic → R3 registry: frozen artifacts · calendars · limits · ban status · regime→style map</div>
+        <div class="bx-m">procedural → the code + runbooks (git PR only)</div></div>
+      <div class="box grow c-insight"><div class="bx-t">LLM seats (12)</div>
+        <div class="bx-m">working → task lease payload in llm_tasks</div>
+        <div class="bx-m">episodic → D4 audit rows (tokens · result · artifacts)</div>
+        <div class="bx-m">semantic → D5 artifacts + Graphify graph + vault notes</div>
+        <div class="bx-m">procedural → skill files (PR + review)</div>
+        <div class="bx-m">owner rules → vault note (cockpit seat writes only)</div></div>
+    </div>
+  </div>
+
+  <div class="diagram">
+    <p class="band-label c-hot"><span class="tick"></span>Control plane — approvals and the kill cascade</p>
+    <div class="band">
+      <div class="box c-hot"><div class="bx-t">L4 · global</div><div class="bx-s">kill all</div></div>
+      <div class="box c-hot"><div class="bx-t">L3 · market</div><div class="bx-s">kill one market</div></div>
+      <div class="box c-hot"><div class="bx-t">L2 · team/venue</div><div class="bx-s">one account</div></div>
+      <div class="box c-hot"><div class="bx-t">L1 · symbol</div><div class="bx-s">one instrument</div></div>
+      <div class="box c-hot"><div class="bx-t">L0 · cell</div><div class="bx-s">one executor</div></div>
+      <div class="box grow c-neutral"><div class="bx-t">Owner tiers</div><div class="bx-s">L0 chat answers · L1 sandbox checks · L2 sign-offs (ladder, budget, triage) · L3 live decisions (promote, kill re-arm, deploy — approval cards in chat)</div></div>
+    </div>
+    <div class="arrowrow">▼<span class="lbl">cascades down · the out-of-band watchdog + venue-side max-loss order + one-action mobile kill sit OUTSIDE the app</span></div>
+    <div class="band">
+      <div class="box grow c-warm"><div class="bx-t">Safety net checked monthly (chaos drills)</div><div class="bx-m">10× restart · feed-stale · venue-down · kill-switch drill · restore from Compose snapshot · reconcile-before-orders on every boot</div></div>
+    </div>
+  </div>
+
+  <h3>Cockpit monitor surfaces (G2) — one line each</h3>
+  <table class="mini">
+    <tr><th>Cell health</th><td>heartbeat · state · last decision id · kill status per cell</td></tr>
+    <tr><th>Portfolio</th><td>D4-derived exposure/net across the 3 sub-accounts</td></tr>
+    <tr><th>Market state</th><td>session clock per venue · kill-state · ban status</td></tr>
+    <tr><th>Data</th><td>gap calendar · 16-TB tracker · collector backlog</td></tr>
+    <tr><th>LLM layer</th><td>token burn/seat/day (G9) · eval replays · failed tasks</td></tr>
+    <tr><th>Research</th><td>G4 trial counts · DSR status · coverage-map heat</td></tr>
+    <tr><th>Ops</th><td>incident queue · drill results · backup freshness</td></tr>
+  </table>
+  <div class="footer"><span>memory management: D4 ≥5 yr · G4 forever · llm_tasks trimmed after digest · Obsidian note types (decision · incident · runbook · digest · training-record) · W0c substrate shootout</span><span>page 8 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 9 · BUILD WAVES ================= -->
+<section class="page">
+  <p class="eyebrow">Page 9 · the build</p>
+  <h2 class="page-title">Build order — waves with exit pins that must print real output</h2>
+  <p class="page-sub">Data first → agents second → history grows third (owner order, S42). A wave is DONE only when its pin commands produce real, filed output.</p>
+
+  <div class="diagram">
+    <div class="wavebar"><span class="wn">W0a</span><div class="bar c-bus" style="width:156mm">monorepo + Compose (Postgres · QuestDB · NATS) · R1 rail · 5 D1 gates — pin: replay twice bit-identical · bench JSON filed</div></div>
+    <div class="wavebar"><span class="wn">B1</span><div class="bar c-motion" style="width:150mm">collectors market/news/world · 6–10y backfill per tiers · gaps table — pin: B-GATE rows verified BEFORE any agent trains</div></div>
+    <div class="wavebar"><span class="wn">W0b</span><div class="bar c-hot" style="width:147mm">D4/D5 roles+signing · E1/E2/E5/E7 skeletons · L0–L4+watchdog — pin: restart ×10 · fan-out p99 file · kill drill log</div></div>
+    <div class="wavebar"><span class="wn">W0c</span><div class="bar c-insight" style="width:150mm">LLM control plane · llm_tasks · Graphify+Obsidian · cockpit v1 — pin: cold start · 10× Compose restart · substrate numbers</div></div>
+    <div class="wavebar"><span class="wn">W1</span><div class="bar c-cold" style="width:140mm">D6 cache · PySR/MAPIE/arch · E4-SIM/BT/WF · E6-PAPER — pin: one full style through the ladder to a signed D5 artifact</div></div>
+    <div class="wavebar"><span class="wn">W2</span><div class="bar c-warm" style="width:135mm">cost model (O8) · cTrader adapter · proton MV trial · news/data-QA/compliance seats — pin: paper fills + E7↔broker reconcile</div></div>
+    <div class="wavebar"><span class="wn">W3</span><div class="bar c-action" style="width:120mm">first cells to shadow · NY4 lane planning — pin: shadow P&amp;L/IC files, no live claims</div></div>
+    <div class="wavebar"><span class="wn">W4–5</span><div class="bar c-action" style="width:125mm">tick+depth → microstructure E1 · Hyperliquid node option · crypto cells · ML lane live — pin: microstructure replay</div></div>
+    <div class="wavebar"><span class="wn">St 6</span><div class="bar c-neutral" style="width:110mm">cockpit GA: panel + L3 approvals (O16 resolved) — pin: L3 flow demo · weekly digest in vault</div></div>
+    <div class="wavebar"><span class="wn">St 7–10</span><div class="bar c-neutral" style="width:130mm">Terminal/Portal/Media (rights-firewalled) · World Monitor LAST · HFT subsystem only if measured — pin: Row-1 never touches the hot path</div></div>
+  </div>
+
+  <h3>Week-1 concrete instructions</h3>
+  <ul class="tight">
+    <li>Create the monorepo skeleton (§2.1 of the blueprint) and bring up Compose with healthchecks.</li>
+    <li>Write the R1 rail minimal loop: validate → stamp → publish to market.* → dump D0 parquet.</li>
+    <li>Build the replay-harness CLI and the G1 concurrency-bench stub — these two ARE the W0a gates.</li>
+    <li>Import the 5 plans + this blueprint into mani/docs · create the vault note types.</li>
+    <li>Build the Graphify baseline graph (--update) · open the W0a gate document — every measurement lands there as it happens.</li>
+  </ul>
+  <div class="footer"><span>quality wall on every wave: cargo clippy -D warnings · cargo test · tsc --noEmit · uv run pytest · review + cybersec seats · secret scan</span><span>page 9 / 10</span></div>
+</section>
+
+<!-- ================= PAGE 10 · HONESTY REGISTER ================= -->
+<section class="page">
+  <p class="eyebrow">Page 10 · the fine print</p>
+  <h2 class="page-title">Honesty register — measured vs. estimated vs. rejected</h2>
+  <p class="page-sub">The plan contains zero unverifiable performance claims. Every number keeps its label from the source session.</p>
+
+  <div class="diagram">
+    <p class="band-label c-warm"><span class="tick"></span>Vendor-claims and author-claims — labeled, never repeated as fact</p>
+    <div class="band">
+      <div class="box grow c-warm"><div class="bx-m">Upstox ~45 ms RTT · "80% token-cut" (memory-setup, unreproducible by its own README) · Any "71.5×" claim → replaced by our own W0c fit-test · Graphify Cloud upsell REJECTED</div></div>
+    </div>
+    <p class="band-label c-cold"><span class="tick"></span>What we measure ourselves, at its own gate</p>
+    <div class="band">
+      <div class="box grow c-cold"><div class="bx-m">W0a: 5 D1 gates (burst · determinism · pre-warm · restore · 10× restart) <br>W0b: fan-out P99 + crash-restart ×10 <br>W0c: Graphify recall delta + recall-substrate shootout + cockpit cold start <br>W1: DSR ≥ 0.95 + crisis replay + 10³-candidate cap <br>W2: ingest parity for proton MVs vs JetStream benchmark</div></div>
+    </div>
+  </div>
+
+  <h3>Rejects on the record (why they were excluded)</h3>
+  <table class="mini">
+    <tr><th>AI-Trader</th><td>no LICENSE file (badge links to nothing) · hosted platform, not a library</td></tr>
+    <tr><th>nixtla SDK</th><td>cloud-locked api.nixtla.io · the free models live in statsforecast/mlforecast</td></tr>
+    <tr><th>laya-mlx runtime</th><td>MLX is darwin/arm64-only, CUDA unsupported in code · decision-head contract adopted instead</td></tr>
+    <tr><th>OpenStock code</th><td>AGPL-3.0 — UX ideas only, zero code lift</td></tr>
+    <tr><th>TimescaleDB for D1</th><td>tsl/ license wall verified upstream · QuestDB is D1 (§19 final)</td></tr>
+  </table>
+
+  <h3>Open decisions carried to their waves</h3>
+  <div class="chips">
+    <span class="chip">O3 F&amp;O granularity</span><span class="chip">O4 off-index names</span><span class="chip">O5 first style</span>
+    <span class="chip">O6 FX scalping add</span><span class="chip">O7 hedge executor</span><span class="chip warm">O8 cTrader prod limits</span>
+    <span class="chip warm">O9 Upstox algo-tag</span><span class="chip">O10 order-balance def</span>
+    <span class="chip warm">O11 HL FIU-IND/FEMA/tax</span><span class="chip">O12 PIT fundamentals</span>
+    <span class="chip">O13 ToS checklist</span><span class="chip hot">O14 model routing (W0c)</span>
+    <span class="chip warm">O15 NSE membership vendor (W2)</span><span class="chip hot">O16 cockpit runtime (W0c)</span>
+  </div>
+  <p class="small" style="margin-top:4mm">Sources: FULL-SYSTEM-BLUEPRINT (S46) · FULL-SYSTEM-MASTER-PLAN (S45) · AGENT-FLEET-BLUEPRINT · ENGINE-DATABASE-PLAN (incl. §19) · LLM-FLEET-BLUEPRINT · planning log S1–S46. This document adds no new external claims. The reference architecture images inspired layout/style only; all engineering choices are our locked decisions.</p>
+  <div class="footer"><span>END · FINOS-TRADING-PLAN · companion documents remain the sources of truth</span><span>page 10 / 10</span></div>
+</section>
+
+</body>
+</html>
