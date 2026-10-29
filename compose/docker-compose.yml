@@ -1,0 +1,51 @@
+name: gfti
+
+# W0a foundation stack (FULL-SYSTEM-BLUEPRINT §2.2).
+# Local-development credentials ONLY — production values come from env at deploy
+# time; these names/passwords are placeholders in a public repo by design.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: gfti
+      POSTGRES_USER: gfti_app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gfti_app -d gfti"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  questdb:
+    image: questdb/questdb:7
+    ports:
+      - "127.0.0.1:9000:9000"   # REST/ILP HTTP
+      - "127.0.0.1:9009:9009"   # ILP TCP
+    volumes:
+      - qdbdata:/var/lib/questdb
+    healthcheck:
+      # readiness over REST: querying /exec must return 200
+      test: ["CMD-SHELL", "timeout 3 curl -fsS 'http://127.0.0.1:9000/exec?query=select%201' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["--name", "gfti-nats", "-js", "-m", "8222"]
+    ports:
+      - "127.0.0.1:4222:4222"   # client
+      - "127.0.0.1:8222:8222"   # monitor
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 wget -qO- http://127.0.0.1:8222/healthz?js_enabled_only=true || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  pgdata:
+  qdbdata:

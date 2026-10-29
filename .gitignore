@@ -1,0 +1,5 @@
+# local env / build artifacts (never committed)
+.env
+__pycache__/
+*.pyc
+target/

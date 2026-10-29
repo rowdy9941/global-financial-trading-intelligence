@@ -1,0 +1,12 @@
+[package]
+name = "rail"
+version = "0.1.0"
+edition = "2024"
+
+# R1 rail — W0a skeleton (see ../docs/gates/W0a.md).
+# Dependency policy for the hot-path kernel at this stage: std-only until the
+# W0a gates force real deps (NATS client, parquet). Every dependency lands with a
+# license check + a reason comment, per the adopt-vs-build contract.
+[dependencies]
+
+[dev-dependencies]
