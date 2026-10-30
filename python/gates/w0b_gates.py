@@ -245,9 +245,95 @@ def gate_watchdog():
     return fc_ok and live_ok or False
 
 
+def gate_engine():
+    """W0b pin: E1/E2/E5/E7 skeleton — the deterministic decision spine.
+
+    Phase A (kill ENGAGED): 200 ticks, 4 decisions — every one must refuse on
+    the kill ladder and ZERO order intents published (fail-closed decision).
+    Phase B (kill OPEN): fresh cell + fresh E7 — 4 allows, 4 signed fills in
+    D4, signature recon clean, E1+E2+E5 internal p99 within the <1 ms budget.
+    """
+    e, secret = owner_env()
+    e = dict(e, LEDGER_SECRET_OWNER=secret, RAIL_NATS_URL="nats://127.0.0.1:4222",
+             KILL_REFRESH_MS="200", CELL_TICKS="220", CELL_DECIDE_EVERY="50",
+             CELL_SUBJECT="market.spot.NIFTY")
+    run(BIN / "ledger_init", str(SQL), env=e)
+    psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
+
+    def feed(path, base_price, base_ts):
+        with open(path, "w") as fh:
+            for i in range(220):
+                fh.write(f"NIFTY {base_ts + i * 1_000_000_000} "
+                         f"{round(base_price + i * 0.02, 2)} public\n")
+
+    def run_cell_phase(tag, price_base, ts_base):
+        log = f"/tmp/opencode/w0b_cell_{tag}.log"
+        with open(log, "w") as fh:
+            p = subprocess.Popen([str(BIN / "cell")], env=e, stdout=fh,
+                                 stderr=subprocess.STDOUT, cwd=str(REPO))
+        time.sleep(1.2)  # cell subscribed
+        feed(f"/tmp/opencode/w0b_cell_{tag}_feed.tsv", price_base, ts_base)
+        subprocess.run([str(BIN / "rail")], stdin=open(f"/tmp/opencode/w0b_cell_{tag}_feed.tsv"),
+                       capture_output=True, timeout=120, cwd=str(REPO))
+        p.wait(timeout=60)
+        return Path(log).read_text()
+
+    # ---- Phase A: engaged → every decision refuses, zero intents ----
+    run(BIN / "ledger_kill", "engage", "L0", "W0b-engine-failclosed", env=e)
+    txtA = run_cell_phase("A", 100.50, 1773000000000000000)
+    summA = [x for x in txtA.splitlines() if x.startswith("LEDGER-CELL-SUMMARY")]
+    sa = json.loads(summA[-1].split(" ", 1)[1]) if summA else {}
+    a_ok = (sa.get("decisions") == 4 and sa.get("refuse_kill") == 4
+            and sa.get("intents_published") == 0)
+
+    # ---- Phase B: open → allow → E6 intent → E7 signed fill → recon ----
+    run(BIN / "ledger_kill", "resolve", "L4", "W0b-engine-open", env=e)
+    with open("/tmp/opencode/w0b_e7_in.txt", "w") as gfh:
+        gfh.write("GO\n")
+    e7log = open("/tmp/opencode/w0b_e7.log", "w")
+    p_e7 = subprocess.Popen([str(BIN / "e7")],
+                            env=dict(e, E7_EXPECT="4", E7_SUBJECT="order.spot.>",
+                                     LEDGER_SECRET_OWNER=secret),
+                            stdin=open("/tmp/opencode/w0b_e7_in.txt"),
+                            stdout=subprocess.DEVNULL, stderr=e7log, cwd=str(REPO))
+    time.sleep(1.2)
+    txtB = run_cell_phase("B", 200.00, 1774000000000000000)
+    p_e7.wait(timeout=60)
+    e7log.close()
+    summB = [x for x in txtB.splitlines() if x.startswith("LEDGER-CELL-SUMMARY")]
+    sb = json.loads(summB[-1].split(" ", 1)[1]) if summB else {}
+    e7txt = Path("/tmp/opencode/w0b_e7.log").read_text()
+    e7_done = [x for x in e7txt.splitlines() if x.startswith("LEDGER-E7-DONE")]
+    sev = json.loads(e7_done[-1].split(" ", 1)[1]) if e7_done else {}
+    # signature verification over everything E7 signed
+    recon = subprocess.run([str(BIN / "ledger_recon")], env=e,
+                           capture_output=True, text=True, timeout=300)
+    rline = [x for x in recon.stdout.splitlines() if x.startswith("LEDGER-RECON ")]
+    rj = json.loads(rline[-1].split(" ", 1)[1]) if rline else {}
+    b_ok = (sb.get("decisions") == 4 and sb.get("allows") == 4
+            and sb.get("intents_published") == 4 and sb.get("e12_p99", 1e12) < 1_000_000
+            and sev.get("fills") == 4 and rj.get("bad_sigs") == 0 and recon.returncode == 0)
+    ok = a_ok and b_ok
+    print("W0B-G7-ENGINE-CELL " + json.dumps({
+        "phaseA": {"decisions": sa.get("decisions"), "refuse_kill": sa.get("refuse_kill"),
+                   "intents_published": sa.get("intents_published"), "ok": a_ok},
+        "phaseB": {"decisions": sb.get("decisions"), "allows": sb.get("allows"),
+                   "intents_published": sb.get("intents_published"),
+                   "e12_p50_ns": sb.get("e12_p50"), "e12_p99_ns": sb.get("e12_p99"),
+                   "budget_ns": 1_000_000, "fills_signed": sev.get("fills"),
+                   "bad_sigs": rj.get("bad_sigs"), "ok": b_ok},
+        "ok": ok,
+    }))
+    for x in txtB.splitlines():
+        if x.startswith("LEDGER-CELL-DECISION "):
+            print("  " + x[:150])
+    return ok
+
+
 GATES = {"APPEND": gate_append_only, "KILL": gate_kill_drill,
          "RESTART": gate_restart_x10, "RECON": gate_sign_recon,
-         "FANOUT": gate_fanout, "WATCHDOG": gate_watchdog}
+         "FANOUT": gate_fanout, "WATCHDOG": gate_watchdog,
+         "ENGINE": gate_engine}
 
 if __name__ == "__main__":
     which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"

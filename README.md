@@ -18,10 +18,12 @@ full structures spelled out under each.
 > in evidence) · kill drill with fail-closed rc7 · Postgres restart ×10 ·
 > batched signed appends **~0.4–0.5 ms/row** (vs 25.8 ms/row autocommit baseline)
 > with 20,000/20,000 signatures verified · fan-out bench 4 cells exact-count,
-> **worst p99 1.52 ms ≤ 2 ms budget** · out-of-band watchdog (fail-closed drills,
-> live cascade detection in 140 ms) — see `docs/gates/W0a.md` and
-> `docs/gates/W0b.md` for verbatim outputs. Remaining W0b increment-level scope:
-> E-cell skeletons (E1/E2/E5/E7) + L1–L4 approval flow.> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
+> **worst p99 1.68 ms ≤ 2 ms budget** · out-of-band watchdog (fail-closed drills,
+> live cascade detection in 140 ms) · **E-cell skeletons G7**: E1+E2+E5 p50
+> 525 ns / p99 7.5 µs, fail-closed phase 4/4 refuse + 0 intents, open phase
+> 4 allows → 4 signed fills, bad_sigs 0 — see `docs/gates/W0a.md` and
+> `docs/gates/W0b.md` for verbatim outputs. Remaining W0b scope: L1–L4
+> approval flow.> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
 > **MEASURED** = real recorded output · unlabelled = a locked decision from the sessions.
 
 ---

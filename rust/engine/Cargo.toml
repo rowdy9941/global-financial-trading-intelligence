@@ -1,0 +1,15 @@
+[package]
+name = "engine"
+version = "0.1.0"
+edition.workspace = true
+
+# E-cell skeletons (W0b, blueprint §2.1 tree: engine/{featurize,evaluate,govern,ledger}).
+# Reuses the proven kernels: rail::wire (NATS client) + ledger (D4 append/kill).
+# No new external dependencies (workspace zero-dep policy until a gate forces one).
+
+[dependencies]
+rail = { path = "../rail" }
+ledger = { path = "../ledger" }
+
+[lints.rust]
+warnings = "deny"

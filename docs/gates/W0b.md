@@ -135,6 +135,60 @@ fail-closed); (b) live cascade → the engage row (appended by `ledger_kill`)
 detected within one poll interval (140 ms after the engage timestamp at a
 250 ms poll), and `open` observed again after the resolve row.
 
+## G7 — E-cell skeletons (E1/E2/E5/E6/E7) — the deterministic decision spine
+
+Built per blueprint §2.1/§13: `rust/engine` crate (zero new external
+dependencies — reuses the proven `rail::wire` NATS client and `ledger` kernels).
+
+| Cell | What the skeleton proves |
+|---|---|
+| E1 featurize | per-symbol ring-buffer SMAs (fast 5 / slow 20), O(1) amortized, no decisions until warm — µs-class measured |
+| E2 evaluate | compiled-constant skeleton rule (full D5-signed artifacts land W1; the `Features → Action` interface stays) |
+| E5 govern | deterministic ladder: kill-state FIRST (fail-closed), then size cap; kill cache refreshed in background thread + synchronously before any tick; staleness > 3× `KILL_REFRESH_MS` ⇒ REFUSE — **no per-decision DB hit** |
+| E6 route | allowances publish `order.spot.<SYM>` intent `"<side> <qty.8> <px.8> <dec_id>"`; publish failure kills the cell (fail-closed) |
+| E7 ledger | separate process consuming `order.spot.>`: refuses intents when kill not open, appends SIGNED fills to D4 under the owner role |
+
+Kernel fix found by this gate: `Nats::publish/subscribe/connect` ack paths
+previously **discarded interleaved `MSG` deliveries** while waiting for a PONG —
+a cell publishing mid-stream would silently drop inbound ticks (observed as a
+cell frozen at tick ~60 of phase B). Fixed in `rail/src/wire.rs` with a pending
+inbox drained FIFO by `next_message`; regression test
+`wire::tests::deliveries_en_route_to_a_pong_are_queued_not_dropped` pins it.
+
+`python3 python/gates/w0b_gates.py ENGINE` (harness: `CELL_TICKS=220`,
+`CELL_DECIDE_EVERY=50`, `KILL_REFRESH_MS=200` — decisions at warm ticks
+50/100/150/200) →
+
+```
+W0B-G7-ENGINE-CELL {"phaseA": {"decisions": 4, "refuse_kill": 4, "intents_published": 0, "ok": true}, "phaseB": {"decisions": 4, "allows": 4, "intents_published": 4, "e12_p50_ns": 525, "e12_p99_ns": 7500, "budget_ns": 1000000, "fills_signed": 4, "bad_sigs": 0, "ok": true}, "ok": true}
+  LEDGER-CELL-DECISION {"dec_id":0,"subject":"market.spot.NIFTY","e12_ns":422,"sma_fast":201.320000,"sma_slow":201.170000,"tunix_ms":1793343247928,"verd
+  LEDGER-CELL-DECISION {"dec_id":1,"subject":"market.spot.NIFTY","e12_ns":7500,"sma_fast":202.320000,"sma_slow":202.170000,"tunix_ms":1793343247949,"ver
+  LEDGER-CELL-DECISION {"dec_id":2,"subject":"market.spot.NIFTY","e12_ns":400,"sma_fast":203.320000,"sma_slow":203.170000,"tunix_ms":1793343247962,"verd
+  LEDGER-CELL-DECISION {"dec_id":3,"subject":"market.spot.NIFTY","e12_ns":525,"sma_fast":204.320000,"sma_slow":204.170000,"tunix_ms":1793343247978,"verd
+SUMMARY {"ENGINE": true}
+```
+
+(The decision lines are truncated at display width by the harness printer; the
+full rows are in `/tmp/opencode/w0b_g7.out` and reproduce with the command.)
+
+MEASURED, both phases on the rebuilt release binaries (`cargo build --release`,
+`cargo clippy --workspace -- -D warnings` = 0 issues):
+
+* **Phase A (kill ENGAGED)** — 4/4 decisions `refuse_kill`, **0 order intents
+  published**: the fail-closed ladder governs in-cell at ~400–750 ns E1+E2+E5.
+* **Phase B (kill OPEN)** — 4 allows → 4 E6 intents → E7 signed 4 fills into D4
+  (`source=cell-e6`, signer role owner); signature recon over the run:
+  **bad_sigs = 0**. E1+E2+E5 internal latency p50 **525 ns**, p99 **7.5 µs** —
+  two orders under the <1 ms hot-path budget (§9).
+
+Post-fix re-verification: because the wire kernel changed after G5 was
+recorded, FANOUT was re-run on the final binaries — PASS again, worst p99
+**1.68 ms ≤ 2 ms budget** (was 1.52 ms pre-fix; the pending-inbox adds a small
+sub-ms delivery-queueing cost, and both measurements are within budget). Rail
+tests: 9/9 green — including `ilp::encode_sanity_no_quadratic_rebuild`, which
+was flaky under parallel test load (one scheduler preemption tripped its
+per-row 50 µs assertion) and now asserts a 1000-row total budget instead.
+
 ## Landed verdicts
 
 `d3.gate_w0b` rows now cover G1/G2/G4 batch runs (see the landing section
@@ -142,7 +196,7 @@ above); G5/G6 land through the same harness path on their next `ALL` run.
 
 ## Remaining W0b scope (final increments)
 
-Per blueprint §13: E-cell skeletons (E1/E2/E5/E7 with flight-recorder traces)
-and L1–L4 approvals (the L0 open/engage mechanics + view + drill are done; the
-approval *ticket* flow for trade plans is the remaining piece). The FANOUT
-bench and watchdog binary from the earlier list are done (G5/G6 above).
+Per blueprint §13: the remaining W0b build item is **L1–L4 approvals** — the
+L0 open/engage/resolve mechanics, view, drill and watchdog are done; the
+approval *ticket* flow for trade plans is the remaining piece. The E-cell
+skeleton gate (G7) landed above.

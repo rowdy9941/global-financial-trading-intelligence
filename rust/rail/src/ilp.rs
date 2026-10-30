@@ -141,13 +141,16 @@ mod tests {
     /// in the gate doc.
     #[test]
     fn encode_sanity_no_quadratic_rebuild() {
+        // Total-time budget rather than per-row: one scheduler preemption on a
+        // busy dev box must not fail a perf-sanity test (W0b lesson).
+        let t_all = std::time::Instant::now();
         for i in 0..1000u64 {
-            let t0 = std::time::Instant::now();
             let line = ilp_line("market_spot", "BTC_USDT", 1_772_000_000_000_000_000 + i, i, 420.17);
-            let dt = t0.elapsed();
             assert!(!line.is_empty());
-            assert!(dt.as_nanos() < 50_000, "encode anomalous: {}ns (dev profile) on row {i}", dt.as_nanos());
         }
+        let dt = t_all.elapsed();
+        // 1000 rows in < 50 ms ⇒ ~50 µs/row amortized — far from quadratic.
+        assert!(dt.as_millis() < 50, "encode anomalous: 1000 rows in {dt:?} (dev profile)");
     }
 }
 
