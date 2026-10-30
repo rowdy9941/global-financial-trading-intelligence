@@ -43,8 +43,47 @@ further evidence is against this compose stack.)
 
 ## Pin 2 — 5 D1 store gates (burst · determinism · pre-warm · restore · 10× restart)
 
-Not started. Runs against the Compose stack of pin 1. Each gate = a small harness
-printing its own pass/fail JSON into this file.
+DONE 2026-10-30 against the live compose QuestDB `questdb:7.4.2`. Ingest runs
+through the production `rail::ilp` path (`rust/rail/src/bin/d1_ingest.rs`);
+checks against the REST `/exec` endpoint; every line below is verbatim output
+of `python/gates/d1_gates.py`.
+
+Two real fixes the gates forced (kept as lessons, not hidden):
+
+1. **QuestDB 7.4.2 ILP grammar is stricter than the docs suggest** — numeric
+   fields need explicit suffixes (`i` long, `d` double); the bare `…u` field
+   was silently rejected on the TCP path (connection `reason=0`, table never
+   created). First proven over HTTP `/write` (it returns parse errors the TCP
+   path swallows), then fixed in `rail::ilp` + exact-byte unit tests.
+2. **Volume-layout restore lesson** — the data volume root *is* the datadir;
+   restoring the tar with its `questdb/` prefix merged instead of replaced
+   (first run: markers survived restore; gate called it). Fixed to
+   wipe-then-extract with `--strip-components=1`; the replay of the gate
+   proved reversal (105 → 100).
+
+```
+GATE-A-BURST {"n_sent": 500000, "rows_server": 500000, "ok": true, "ingest_wall_s": 6.95, "client_ns_per_row": 13818, "rows_per_sec_eq": 71938}
+GATE-B-DETERMINISM {"rows": 10000, "rows_tab1": 10000, "rows_tab2": 10000, "datasets_identical": true, "ok": true}
+GATE-C-PREWARM {"cold_first_query_ms": 153.7, "warm_p50_ms": 6.6, "warm_p99_ms": 134.2, "cold_result_rows": 500000, "ok": true}
+GATE-D-RESTORE {"rows_backup": 100, "rows_after_marker_ingest": 105, "rows_after_restore": 100, "backup_bytes": 19263763, "markers_reverted": true, "ok": true}
+GATE-E-10XRESTART {"restarts": 10, "invariant_rows": 200, "cycles_ms": [16997, 15966, 18009, 18049, 16641, 17113, 15662, 17058, 18350, 16042], "all_cycles_ok": true, "head_rows": [[1772000000000000000, 100.0], [1772000001000000000, 100.01], [1772000002000000000, 100.02], [1772000003000000000, 100.03], [1772000004000000000, 100.04]], "ok": true}
+```
+
+Reads: burst ingest 500k rows lands in 6.95 s end-to-end (72k rows/s through
+encode→TCP→daemon-commit; client encode alone is 639 ns/row — the wall is
+daemon-side commit, MEASURED). Write-path determinism: two independent 10k-row
+ingests produce byte-comparable identical datasets. Pre-warm: cold first query
+154 ms → warm p50 6.6 ms. Restore: true volume restore reverts post-backup
+markers exactly. 10 restarts × ~17 s each with the 200-row invariant and stable
+row ordering intact.
+
+## W0a status — all pins green
+
+Pin 1 compose stack ✅ · Pin 2 five D1 gates ✅ · Pin 3 rail loop ✅ ·
+Pin 4 replay determinism ✅ · Pin 5 G1 bench ✅ · Pin 5b fan-out ✅ ·
+Pin 5c wire throughput ✅ · Pin 6 D0 parquet ✅ · Pin 7 D1 prep/ILP ✅.
+**W0a = DONE on 2026-10-30** (final scope check before B1: hygiene scan,
+workspace gates, then wipe gate tables for a clean B1 start).
 
 ## Pin 3 — R1 rail minimal loop (validate → as-of → rights-tag → publish → D0 dump)
 

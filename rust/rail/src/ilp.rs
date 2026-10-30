@@ -30,12 +30,14 @@ fn esc_cell(b: &str) -> String {
 }
 
 /// One stamped row → one ILP line (no trailing newline here; assemble() adds it).
-/// Symbol column carries the exchange symbol (deduped server-side); ts is the
-/// event time in **epoch micros**; arrival is kept as a value column in nanos.
+/// QuestDB 7.4.2 grammar (verified live against the compose daemon, /write 204):
+/// numeric fields MUST carry suffixes — `i` long, `d` double; a bare-trailing
+/// integer is the designated timestamp (epoch micros). Symbol column is deduped
+/// server-side; arrival kept as value column (nanos).
 pub fn ilp_line(table: &str, symbol: &str, ts_nanos: u64, arrival_nanos: u64, price: f64) -> String {
     let micros = ts_nanos / 1_000;
     format!(
-        "{table},symbol={} ts_nanos={}u,arrival_nanos={}u,price={} {}",
+        "{table},symbol={} ts_nanos={}i,arrival_nanos={}i,price={}d {}",
         esc_cell(symbol),
         ts_nanos,
         arrival_nanos,
@@ -92,8 +94,9 @@ mod tests {
     use std::io::Read;
     use std::net::{TcpListener, TcpStream};
 
-    /// The D1 wire path, end-tested against a local fake server: exact bytes,
-    /// framing newline, escaping, epoch-micros stamp.
+    /// The D1 wire path, end-tested against a local fake server over TCP AND
+    /// the real QuestDB grammar (suffixes `i`/`d`, micros designated ts):
+    /// exact bytes, framing newline, escaping.
     #[test]
     fn encodes_and_delivers_exact_bytes_to_tcp() {
         let l = TcpListener::bind("127.0.0.1:0").expect("bind");
@@ -122,12 +125,12 @@ mod tests {
         let l1 = lines.next().expect("line1");
         assert_eq!(
             l1,
-            "market_spot,symbol=NIFTY ts_nanos=1772000000000001895u,arrival_nanos=1772000000000001900u,price=101.25 1772000000000001"
+            "market_spot,symbol=NIFTY ts_nanos=1772000000000001895i,arrival_nanos=1772000000000001900i,price=101.25d 1772000000000001"
         );
         let l2 = lines.next().expect("line2");
         assert_eq!(
             l2,
-            "market_spot,symbol=US%20D\\'Q ts_nanos=1772000000000001890u,arrival_nanos=1772000000000001891u,price=-0.5 1772000000000001"
+            "market_spot,symbol=US%20D\\'Q ts_nanos=1772000000000001890i,arrival_nanos=1772000000000001891i,price=-0.5d 1772000000000001"
         );
         assert!(lines.next().is_none(), "exactly 2 lines, newline-framed");
     }
