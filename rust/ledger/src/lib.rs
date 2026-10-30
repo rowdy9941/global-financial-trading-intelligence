@@ -302,3 +302,139 @@ pub fn kill_flip(
 fn errstr(e: postgres::Error) -> String {
     e.to_string()
 }
+
+// ------------------------------------------------------------- approvals --
+
+pub const OWNER_ROLE: &str = "owner";
+pub const L3_WEEK_QUOTA: i64 = 5; // C8: ≤5 live-decision grants per 7 days
+
+/// Register/update a role (bootstrap only): secret stored as sha256,
+/// never persisted plaintext.
+pub fn ensure_role_named(c: &mut Client, role_name: &str, secret: &str) -> Result<(), String> {
+    ensure_role(c, role_name, secret)
+}
+
+/// Open a ticket in the D3 registry. The decision itself lands ONLY in
+/// d4.approvals (append-only); until then the ticket is `pending`.
+pub fn request_ticket(
+    c: &mut Client,
+    ticket: &str,
+    level: &str,
+    requester_role: &str,
+    reason: &str,
+) -> Result<(), String> {
+    if !matches!(level, "L1" | "L2" | "L3" | "L4") {
+        // L0 is chat/open ops, never a ticket tier
+        return Err(format!("bad ticket tier {level}"));
+    }
+    c.execute(
+        "INSERT INTO d3.tickets (ticket, level, requester_role, reason)
+         VALUES ($1, $2, $3, $4)",
+        &[&ticket, &level, &requester_role, &reason],
+    )
+    .map_err(errstr)?;
+    Ok(())
+}
+
+/// Number of L3 grants already granted within the rolling 7-day window.
+pub fn l3_week_grants(c: &mut Client) -> Result<i64, String> {
+    let rows = c
+        .query(
+            "SELECT count(*) FROM d4.approvals
+             WHERE level = 'L3' AND decision = 'grant'
+               AND ts_est > now() - interval '7 days'",
+            &[],
+        )
+        .map_err(errstr)?;
+    Ok(rows.first().map(|r| r.get(0)).unwrap_or(0))
+}
+
+/// Record ONE decision row in the append-only d4.approvals.
+/// Authority (skeleton contract, gate G8):
+///   * the ticket must exist and must NOT already be decided
+///   * L2/L3/L4 decisions: ONLY the owner role
+///   * L3 grants: C8 fail-closed quota (L3_WEEK_QUOTA per rolling week)
+///
+/// Returns the approval id.
+pub fn decide_approval(
+    c: &mut Client,
+    ticket: &str,
+    decision: &str,
+    level: &str,
+    decider_role: &str,
+    reason: &str,
+) -> Result<i64, String> {
+    if !matches!(decision, "grant" | "deny") {
+        return Err(format!("bad decision {decision}"));
+    }
+    if !matches!(level, "L1" | "L2" | "L3" | "L4") {
+        return Err(format!("bad tier {level}"));
+    }
+    // ticket exists at exactly this tier?
+    let rows = c
+        .query("SELECT level FROM d3.tickets WHERE ticket = $1", &[&ticket])
+        .map_err(errstr)?;
+    let Some(r) = rows.first() else {
+        return Err(format!("unknown ticket {ticket}"));
+    };
+    let tlevel: String = r.get(0);
+    if tlevel != level {
+        return Err(format!(
+            "tier mismatch: ticket {ticket} requested {tlevel}, decision says {level}"
+        ));
+    }
+    // already decided? (append-only; latest grants, but any row means closed)
+    let decided = c
+        .query("SELECT 1 FROM d4.approvals WHERE ticket = $1 LIMIT 1", &[&ticket])
+        .map_err(errstr)?;
+    if !decided.is_empty() {
+        return Err(format!("ticket {ticket} already decided"));
+    }
+    // authority ladder
+    if matches!(level, "L2" | "L3" | "L4") && decider_role != OWNER_ROLE {
+        return Err(format!(
+            "unauthorized: {decider_role} cannot decide at {level} (owner only)"
+        ));
+    }
+    // C8 quota: fail-closed on the 6th L3 grant of the rolling week
+    if level == "L3" && decision == "grant" {
+        let n = l3_week_grants(c)?;
+        if n >= L3_WEEK_QUOTA {
+            return Err(format!(
+                "C8-QUOTA-EXCEEDED: {n} L3 grants in the rolling week (max {L3_WEEK_QUOTA})"
+            ));
+        }
+    }
+    let rows = c
+        .query(
+            "INSERT INTO d4.approvals (ticket, level, role_name, decision, reason)
+             VALUES ($1, $2, $3, $4, $5) RETURNING appr_id",
+            &[&ticket, &level, &decider_role, &decision, &reason],
+        )
+        .map_err(errstr)?;
+    Ok(rows.first().map(|r| r.get(0)).unwrap_or(0))
+}
+
+/// Derived state: (pending, Some(decision)) — pending means no decision row.
+pub fn approval_state(
+    c: &mut Client,
+    ticket: &str,
+) -> Result<(bool, Option<String>), String> {
+    let rows = c
+        .query(
+            "SELECT t.ticket IS NOT NULL,
+                    (SELECT decision FROM d4.approvals a
+                      WHERE a.ticket = $1 LIMIT 1)
+             FROM (SELECT ticket FROM d3.tickets WHERE ticket = $1) t",
+            &[&ticket],
+        )
+        .map_err(errstr)?;
+    let Some(r) = rows.first() else {
+        return Err(format!("unknown ticket {ticket}"));
+    };
+    let decided_row: bool = r.get(0);
+    if !decided_row {
+        return Err(format!("unknown ticket {ticket}"));
+    }
+    Ok((r.get::<_, Option<String>>(1).is_none(), r.get(1)))
+}

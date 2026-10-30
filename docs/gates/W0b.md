@@ -189,14 +189,55 @@ tests: 9/9 green — including `ilp::encode_sanity_no_quadratic_rebuild`, which
 was flaky under parallel test load (one scheduler preemption tripped its
 per-row 50 µs assertion) and now asserts a 1000-row total budget instead.
 
+## G8 — L1–L4 approval ticket flow (`ledger_appr` + `d3.tickets` + d4.approvals)
+
+Closes the last W0b build item (blueprint §6 authority tiers · C8 quota).
+Design: tickets are REQUESTED into the mutable D3 registry (`d3.tickets`,
+added by `compose/sql/002_w0b_approval_flow.sql`); DECISIONS land in the
+append-only D4 `d4.approvals` (CHECK-enforced `grant|deny`); state is derived
+— `pending` until a decision row exists. Exit codes are fail-closed:
+0 ok · 7 `C8-QUOTA-EXCEEDED` · 8 unauthorized · 9 already decided.
+
+Authority contract (enforced in `decide_approval`):
+* L2 / L3 / L4 decisions — ONLY the `owner` role (canon decider)
+* L1 sandbox checks — any registered seat role decides (automated path)
+* C8 — at most **5 L3 grants per rolling 7 days**; the 6th grant attempt is
+  refused with exit 7 before any row is written
+
+`python3 python/gates/w0b_gates.py APPROVAL` →
+
+```
+W0B-G8-APPROVAL {"steps": [{"step": "register-roles", "ok": true, "line": "LEDGER-APPR-ROLE {\"role\":\"seat-d1\"}"}, {"step": "l1-request", "ok": true, "line": "LEDGER-APPR-REQUEST {\"ticket\":\"g8-l1-sandbox\",\"level\":\"L1\",\"requester\":\"seat-d1\",\"state\":\"pending\"}"}, {"step": "l1-seat-grant", "ok": true, "line": "LEDGER-APPR-DECISION {\"ticket\":\"g8-l1-sandbox\",\"level\":\"L1\",\"decision\":\"grant\",\"decider\":\"seat-d1\",\"appr_id\":1,\"l3_week_grants\":0}"}, {"step": "l2-request", "ok": true, "line": "LEDGER-APPR-REQUEST {\"ticket\":\"g8-l2-signoff\",\"level\":\"L2\",\"requester\":\"seat-d1\",\"state\":\"pending\"}"}, {"step": "l2-seat-refused-rc8", "ok": true, "line": "LEDGER-APPR-REFUSED unauthorized: seat-d1 cannot decide at L2 (owner only)"}, {"step": "l2-owner-grant", "ok": true, "line": "LEDGER-APPR-DECISION {\"ticket\":\"g8-l2-signoff\",\"level\":\"L2\",\"decision\":\"grant\",\"decider\":\"owner\",\"appr_id\":2,\"l3_week_grants\":0}"}, {"step": "double-decided-rc9", "ok": true, "line": "LEDGER-APPR-REFUSED ticket g8-l2-signoff already decided"}, {"step": "deny-recorded", "ok": true, "line": "LEDGER-APPR-STATE {\"ticket\":\"g8-l2-deny\",\"state\":\"deny\"}"}, {"step": "c8-five-grant-then-rc7", "ok": true, "line": "LEDGER-APPR-REFUSED C8-QUOTA-EXCEEDED: 5 L3 grants in the rolling week (max 5)"}, {"step": "pending-state", "ok": true, "line": "LEDGER-APPR-STATE {\"ticket\":\"g8-l3-pending\",\"state\":\"pending\"}"}, {"step": "audit-view", "ok": false, "line": "n \n---\n 8\n(1 row)"}], "ok": false, "last_l3_grant": "LEDGER-APPR-DECISION {\"ticket\":\"g8-l3-promo-5\",\"level\":\"L3\",\"decision\":\"grant\",\"decider\":\"owner\",\"appr_id\":8,\"l3_week_grants\":5}", "c8_refusal": "LEDGER-APPR-REFUSED C8-QUOTA-EXCEEDED: 5 L3 grants in the rolling week (max 5)"}
+```
+
+The above first run is recorded verbatim INCLUDING its `ok: false` — 10 of 11
+steps passed; the only miss was the gate's own audit-view expectation (I
+asserted 5 decided tickets; the true count is **8** = 1 L1 grant + 1 L2 grant
++ 1 deny + 5 quota grants — a wrong constant in the test, not in the flow).
+Corrected expectation, final result (full log `/tmp/opencode/w0b_g8.out`):
+
+```
+ok: True
+steps: 11 all pass: True
+```
+
+MEASURED, on the final binaries (clippy workspace `--all-targets` 0 issues;
+25/25 `test result: ok` suites): seat-overreach blocked (rc 8) before any D4
+write; L2 grant by owner recorded; a second decision on the same ticket
+refused (rc 9); a deny decision is first-class and reads back via
+`ledger_appr state`; L3 quota granted exactly 5 then refused rc 7 with
+`C8-QUOTA-EXCEEDED: 5 L3 grants in the rolling week (max 5)`; a parked ticket
+stays `pending`; the `d3.approval_state` audit JOIN counts 8 decided tickets.
+
 ## Landed verdicts
 
 `d3.gate_w0b` rows now cover G1/G2/G4 batch runs (see the landing section
 above); G5/G6 land through the same harness path on their next `ALL` run.
 
-## Remaining W0b scope (final increments)
+## Remaining W0b scope
 
-Per blueprint §13: the remaining W0b build item is **L1–L4 approvals** — the
-L0 open/engage/resolve mechanics, view, drill and watchdog are done; the
-approval *ticket* flow for trade plans is the remaining piece. The E-cell
-skeleton gate (G7) landed above.
+**None — W0b is complete.** All build items (D4/D5 roles+signing,
+E1/E2/E5/E7 skeletons, L0–L4 + watchdog, IPC fan-out bench) and all exit
+pins (restart ×10 · fan-out p99 · kill drill log) carry recorded gate
+evidence above (G1–G8). Next wave per the owner's build order: **B1 data
+gathering & quality** (DATA-GATHERING-PLAN-V3; DATASET-TODO tiers).

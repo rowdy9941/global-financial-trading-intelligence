@@ -330,10 +330,98 @@ def gate_engine():
     return ok
 
 
+def gate_approvals():
+    """W0b pin: L1–L4 approval ticket flow (blueprint §6, C8).
+
+    d3.tickets registry (request) → d4.approvals append-only decisions;
+    pending = no decision row. Authority: L2+ owner-only, L1 seat-decidable.
+    C8: ≤5 L3 grants per rolling 7 days, fail-closed (rc 7).
+    Exit codes exercised: 0 ok · 7 quota · 8 unauthorized · 9 double-decided.
+    """
+    e, _ = owner_env()
+    run(BIN / "ledger_init", str(SQL))
+    run(BIN / "ledger_init", str(COMPOSE / "sql" / "002_w0b_approval_flow.sql"))
+    # deterministic quota evidence: dev-reset (same appendix as recon gate)
+    psql_exec("TRUNCATE d4.approvals; TRUNCATE d3.tickets;")
+
+    def rc(env, *args):
+        """run returning (rc, combined output) without raising."""
+        r = subprocess.run([str(BIN / "ledger_appr")] + list(args),
+                           capture_output=True, text=True, timeout=120, env=env)
+        return r.returncode, (r.stdout + r.stderr).strip()
+
+    seat_env = dict(e, LEDGER_SECRET_SEAT_D1="dev-seat-g8-alpha")
+    steps, evid, ok = [], [], True
+
+    def step(name, cond, line=""):
+        nonlocal ok
+        ok &= bool(cond)
+        steps.append({"step": name, "ok": bool(cond), "line": line[:200]})
+
+    # roles: owner + one seat (D1 collector seat — outer-registry role shape)
+    lf1, o1 = rc(e, "role", "owner")
+    lf2, o2 = rc(seat_env, "role", "seat-d1")
+    step("register-roles", lf1 == 0 and lf2 == 0, o2)
+    # (a) L1 sandbox check: seat requests, seat auto-decides
+    lf, o = rc(seat_env, "request", "g8-l1-sandbox", "L1",
+               "seat-d1", "checkpoint sandbox re-run")
+    step("l1-request", lf == 0 and "pending" in o, o)
+    lf, o = rc(seat_env, "decide", "g8-l1-sandbox", "grant", "L1", "seat-d1", "sandbox green")
+    step("l1-seat-grant", lf == 0, o)
+    # (b) L2 sign-off: seat may NOT decide; owner may
+    lf, o = rc(seat_env, "request", "g8-l2-signoff", "L2", "seat-d1", "news ladder up")
+    step("l2-request", lf == 0 and "pending" in o, o)
+    lf, o = rc(seat_env, "decide", "g8-l2-signoff", "grant", "L2", "seat-d1", "seat overreach")
+    step("l2-seat-refused-rc8", lf == 8 and "unauthorized" in o, o)
+    lf, o = rc(e, "decide", "g8-l2-signoff", "grant", "L2", "owner", "owner signs off")
+    step("l2-owner-grant", lf == 0, o)
+    # (c) double-decision fails closed
+    lf, o = rc(e, "decide", "g8-l2-signoff", "deny", "L2", "owner", "second decision")
+    step("double-decided-rc9", lf == 9 and "already decided" in o, o)
+    # (d) deny is a first-class decision
+    lf, o = rc(e, "request", "g8-l2-deny", "L2", "seat-d1", "budget raise 2x")
+    rc(e, "decide", "g8-l2-deny", "deny", "L2", "owner", "budget cap holds")
+    lf, o = rc(e, "state", "g8-l2-deny")
+    step("deny-recorded", lf == 0 and '"state":"deny"' in o, o)
+    # (e) C8 quota: exactly 5 L3 grants allowed in the week, 6th fails rc 7
+    for i in range(1, 7):
+        rc(e, "request", f"g8-l3-promo-{i}", "L3", "seat-d1", "artifact promo")
+    n_granted = 0
+    last_grant = ""
+    last_refused_rc = -1
+    last_refused_line = ""
+    for i in range(1, 7):
+        lf, o = rc(e, "decide", f"g8-l3-promo-{i}", "grant", "L3", "owner", "promo")
+        if lf == 0:
+            n_granted += 1
+            last_grant = o
+        else:
+            last_refused_rc = i
+            last_refused_line = o
+    step("c8-five-grant-then-rc7", n_granted == 5 and last_refused_rc == 6
+         and "C8-QUOTA-EXCEEDED" in last_refused_line, last_refused_line)
+    # (f) pending stays pending (no decision row)
+    rc(e, "request", "g8-l3-pending", "L3", "seat-d1", "awaiting owner")
+    lf, o = rc(e, "state", "g8-l3-pending")
+    step("pending-state", lf == 0 and '"state":"pending"' in o, o)
+    # (g) audit view: JOIN works and counts as expected
+    _okv, view = psql_exec(
+        "SELECT count(*) n FROM d3.approval_state WHERE pending = FALSE;")
+    # 1 L1 grant + 1 L2 grant + 1 L2 deny + 5 L3 grants = 8 decided
+    step("audit-view", "8" in view, view)
+
+    print("W0B-G8-APPROVAL " + json.dumps({
+        "steps": steps, "ok": ok,
+        "last_l3_grant": last_grant if n_granted else "",
+        "c8_refusal": last_refused_line if n_granted else "",
+    }))
+    return ok
+
+
 GATES = {"APPEND": gate_append_only, "KILL": gate_kill_drill,
          "RESTART": gate_restart_x10, "RECON": gate_sign_recon,
          "FANOUT": gate_fanout, "WATCHDOG": gate_watchdog,
-         "ENGINE": gate_engine}
+         "ENGINE": gate_engine, "APPROVAL": gate_approvals}
 
 if __name__ == "__main__":
     which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"
