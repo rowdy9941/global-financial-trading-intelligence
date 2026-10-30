@@ -21,15 +21,16 @@ services:
       retries: 12
 
   questdb:
-    image: questdb/questdb:7
+    image: questdb/questdb:7.4.2
     ports:
       - "127.0.0.1:9000:9000"   # REST/ILP HTTP
       - "127.0.0.1:9009:9009"   # ILP TCP
     volumes:
       - qdbdata:/var/lib/questdb
     healthcheck:
-      # readiness over REST: querying /exec must return 200
-      test: ["CMD-SHELL", "timeout 3 curl -fsS 'http://127.0.0.1:9000/exec?query=select%201' || exit 1"]
+      # readiness over REST TCP: the image is Debian-based with bash but no
+      # curl/wget (verified in-container); /dev/tcp needs bash — fine here.
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/9000' || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 24

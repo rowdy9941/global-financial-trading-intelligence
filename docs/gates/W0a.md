@@ -7,13 +7,39 @@ the commands, with the command itself, in the order they ran. Nothing here is pr
 
 ## Pin 1 — Compose foundation stack (Postgres D3/D4 · QuestDB D1 · NATS D2)
 
-Command(s): `docker compose up -d` + `docker compose ps` + per-service health probe
-(`pg_isready` · QuestDB `/exec` 200 · NATS `/healthz?js_enabled_only=true` 200).
+DONE 2026-10-30. Docker daemon 29.6.1 (also enabled at boot). Two measured
+fixes while lifting (the gate caught both):
 
-Result: **BLOCKED — 2026-10-29: host Docker daemon inactive; `sudo systemctl start
-docker` requires interactive authentication.** Owner action agreed: start the
-daemon, then this pin is re-run and its real output is pasted here. No synthetic
-output will be written.
+1. QuestDB image tag `questdb/questdb:7` **does not exist** in Docker Hub
+   (registry API verified) → real newest 7.x tag `7.4.2` pinned in
+   `compose/docker-compose.yml`.
+2. QuestDB 7.4.2 image is Debian-based with bash but **no curl/wget**
+   (verified in-container) → healthcheck switched to a bash `/dev/tcp/9000`
+   probe. Also: a stale NATS container from a failed start had no live port
+   attach — `--force-recreate` healed it (ports now published).
+
+`docker compose ps` (verbatim):
+
+```
+NAME             IMAGE                    SERVICE    STATUS                                 PORTS
+gfti-nats-1      nats:2.10-alpine         nats       Up 43 seconds (healthy)                127.0.0.1:4222->4222/tcp, 127.0.0.1:8222->8222/tcp, 6222/tcp
+gfti-postgres-1  postgres:16-alpine       postgres   Up 5 minutes (healthy)                 127.0.0.1:5432->5432/tcp
+gfti-questdb-1   questdb/questdb:7.4.2    questdb    Up 14 seconds (healthy)                127.0.0.1:9000->9000/tcp, 8812/tcp, 127.0.0.1:9009->9009/tcp
+```
+
+App-level probes (verbatim):
+
+```
+pg_isready -U gfti_app -d gfti   → /var/run/postgresql:5432 - accepting connections
+questdb /exec?query=select 1     → {"query":"select 1","columns":[{"name":"1","type":"INT"}],"timestamp":-1,"dataset":[[1]],"count":1}
+nats /healthz?js_enabled_only=true → {"status":"ok"}
+```
+
+Post-fix confirmation that the whole ingest path still holds on the canonical
+(per-container) bus: publisher `rail: accepted=2000 rejected=0`, consumer
+`WIRE-E2E {"received":500,"n":500,"transit_ns_avg":392217,"p50":299656,"p99":1377677}`.
+(The native nats-server used for the 2026-10-29 measurements is retired; all
+further evidence is against this compose stack.)
 
 ## Pin 2 — 5 D1 store gates (burst · determinism · pre-warm · restore · 10× restart)
 
