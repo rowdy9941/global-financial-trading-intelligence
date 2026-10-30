@@ -90,6 +90,20 @@ to `count(*)` with error propagation through the bin (`PNL NIFTY …` above).
   design, so the recon gate TRUNCATEs first (the only reset possible on an
   append-only table — UPDATE/DELETE denied at DB level).
 
+## Gate-verdict landing (`d3.gate_w0b`)
+
+The harness inserts a verdict row into `d3.gate_w0b` after every run
+(append-row only). Verbatim readback:
+
+```
+           gate            | verdict |            ran_at
+---------------------------+---------+-------------------------------
+ w0b_batch_20261030T111331 | pass    | 2026-10-30 05:43:31.354597+00
+ w0b_batch_20261030T111319 | pass    | 2026-10-30 05:43:19.715114+00
+ w0b_batch_20261030T111317 | pass    | 2026-10-30 05:43:17.303116+00
+(3 rows)
+```
+
 ## Remaining W0b scope (next increments)
 
 Per blueprint §13: E-cell skeletons (E1/E2/E5/E7 with flight-recorder traces),

@@ -145,6 +145,7 @@ if __name__ == "__main__":
     which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"
     todo = GATES if which == "ALL" else {which: GATES[which]}
     results = {}
+    last_output = {}
     for name, fn in todo.items():
         try:
             results[name] = fn()
@@ -152,4 +153,15 @@ if __name__ == "__main__":
             print(f"W0B-GATE-{name}-FAIL {e}")
             results[name] = False
     print("SUMMARY " + json.dumps(results))
+    # land verdicts in d3.gate_w0b (append-only audit of gate runs)
+    try:
+        stamp = json.dumps({k: bool(v) for k, v in results.items()})
+        psql_exec(
+            "INSERT INTO d3.gate_w0b (gate, verdict, payload) VALUES "
+            f"('w0b_batch_{time.strftime('%Y%m%dT%H%M%S')}', "
+            f"'{'pass' if all(results.values()) else 'fail'}', $BODY${stamp}$BODY$"
+            + ") ON CONFLICT (gate) DO NOTHING;"
+        )
+    except Exception as e:  # landing failure must not fake a green gate
+        print(f"W0B-LAND-FAIL d3.gate_w0b: {e}")
     sys.exit(0 if all(results.values()) else 1)
