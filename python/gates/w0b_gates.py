@@ -138,8 +138,116 @@ def gate_sign_recon():
     }))
     return ok
 
+def gate_fanout():
+    """W0b pin: R1→D2 fan-out → cell receive ≤ ~2 ms P99 (formal bench).
+
+    20k deterministic rows published through the production `rail` hot path;
+    4 consumer cells on the compose NATS: three filtered (one symbol each)
+    + one catch-all dashboard cell. Zero loss + zero cross-leak + per-cell p99.
+    """
+    n_total = 20000
+    per = n_total // 4
+    specs = [("market.spot.NIFTY", per), ("market.spot.BTC_USDT", per),
+             ("market.spot.USDJPY", per), ("market.spot.>", n_total)]
+    procs, logs = [], []
+    for i, (subj, cnt) in enumerate(specs):
+        lg = open(f"/tmp/opencode/w0b_fan_{i}.log", "w")
+        logs.append(lg)
+        procs.append(subprocess.Popen(
+            [str(BIN / "rail_sub"), subj, str(cnt), "nats://127.0.0.1:4222"],
+            stdout=subprocess.DEVNULL, stderr=lg, cwd=str(REPO)))
+    time.sleep(1.0)  # subscriptions bound before publish
+    feed = "/tmp/opencode/w0b_fan_feed.tsv"
+    with open(feed, "w") as f:
+        for i in range(n_total):
+            sym = ["NIFTY", "SENSEX", "USDJPY", "BTC_USDT"][i % 4]
+            f.write(f"{sym} {1772000000000000000 + i * 1_000_000_000} "
+                    f"{round(100.5 + i * 0.01, 2)} public\n")
+    r = subprocess.run([str(BIN / "rail")], stdin=open(feed), capture_output=True,
+                       text=True, timeout=180, cwd=str(REPO))
+    pub_ok = r.returncode == 0 and f"accepted={n_total}" in r.stderr
+    for i, p in enumerate(procs):
+        p.wait(timeout=90)
+        logs[i].close()
+    cells, all_ok = [], pub_ok
+    worst_p99 = 0
+    for i, (subj, cnt) in enumerate(specs):
+        txt = Path(f"/tmp/opencode/w0b_fan_{i}.log").read_text()
+        line = [x for x in txt.splitlines() if x.startswith("WIRE-E2E ")]
+        if line:
+            d = json.loads(line[-1].split(" ", 1)[1])
+            cell_ok = d["received"] == cnt and d["p99"] <= 2_000_000
+            worst_p99 = max(worst_p99, d["p99"])
+        else:
+            d = {"received": 0, "p50": None, "p99": None}
+            cell_ok = False
+        all_ok &= cell_ok
+        cells.append({"subject": subj, **d, "expected": cnt, "ok": cell_ok})
+    print("W0B-G5-FANOUT " + json.dumps({
+        "rows_published": n_total, "pub_accepted": pub_ok,
+        "cells": cells, "worst_p99_ns": worst_p99,
+        "budget_ns": 2_000_000, "ok": all_ok,
+    }))
+    return all_ok or False
+
+
+def gate_watchdog():
+    """W0b pin: out-of-band watchdog observes the kill cascade.
+
+    (a) fail-closed: unreachable DB → every tick state=failsafe, strict exit 7
+    (b) live drill: engage tick observed after the engage row, open tick again
+        after the resolve row — detectable at the given poll interval.
+    """
+    e, _ = owner_env()
+    run(BIN / "ledger_init", str(SQL), env=e)
+    # (a) unreachable
+    fc_log = "/tmp/opencode/w0b_watchdog_failclosed.log"
+    p = subprocess.Popen(
+        [str(BIN / "ledger_watchdog"), "--interval-ms", "200",
+         "--timeout-ms", "900", "--strict"],
+        env={**LEDGER_ENV, "LEDGER_URL": "postgres://gfti_app:x@127.0.0.1:5999/none"},
+        stdout=open(fc_log, "w"), stderr=subprocess.STDOUT, cwd=str(REPO))
+    rc_fc = p.wait(timeout=20)
+    fc_ticks = [x for x in Path(fc_log).read_text().splitlines()
+                if x.startswith("LEDGER-WATCHDOG ") and x not in ("LEDGER-WATCHDOG-DONE",)
+                and "state" in x]
+    fc_ok = (rc_fc == 7 and len(fc_ticks) >= 3
+             and all('"state":"failsafe"' in x for x in fc_ticks))
+    # (b) live transitions under observation
+    live_log = "/tmp/opencode/w0b_watchdog_live.log"
+    run(BIN / "ledger_kill", "resolve", "L4", "wd-reset")   # baseline open
+    p2 = subprocess.Popen(
+        [str(BIN / "ledger_watchdog"), "--interval-ms", "250",
+         "--timeout-ms", "2600"],
+        env=LEDGER_ENV, stdout=open(live_log, "w"), stderr=subprocess.STDOUT, cwd=str(REPO))
+    time.sleep(0.7)
+    t_engage = int(time.time() * 1000)
+    run(BIN / "ledger_kill", "engage", "L0", "W0b-watchdog-drill")
+    time.sleep(0.9)
+    t_resolve = int(time.time() * 1000)
+    run(BIN / "ledger_kill", "resolve", "L4", "wd-resolve")
+    p2.wait(timeout=15)
+    ticks = []
+    for x in Path(live_log).read_text().splitlines():
+        if x.startswith("LEDGER-WATCHDOG ") and "tunix_ms" in x:
+            ticks.append(json.loads(x.split(" ", 1)[1]))
+    engaged_seen = [t["tunix_ms"] for t in ticks if t["state"] == "engaged"]
+    open_after = [t["tunix_ms"] for t in ticks if t["state"] == "open"
+                  and t["tunix_ms"] >= t_resolve]
+    live_ok = bool(engaged_seen and engaged_seen[0] >= t_engage - 300 and open_after)
+    engage_detect = (engaged_seen[0] - t_engage) if engaged_seen else None
+    print("W0B-G6-WATCHDOG " + json.dumps({
+        "failclosed_rc": rc_fc, "failclosed_tick_count": len(fc_ticks),
+        "failclosed_all_failsafe": fc_ok,
+        "live_ticks": len(ticks), "engaged_tick_ms_delta": engage_detect,
+        "open_after_resolve_seen": bool(open_after), "ok": fc_ok and live_ok,
+    }))
+    return fc_ok and live_ok or False
+
+
 GATES = {"APPEND": gate_append_only, "KILL": gate_kill_drill,
-         "RESTART": gate_restart_x10, "RECON": gate_sign_recon}
+         "RESTART": gate_restart_x10, "RECON": gate_sign_recon,
+         "FANOUT": gate_fanout, "WATCHDOG": gate_watchdog}
 
 if __name__ == "__main__":
     which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"

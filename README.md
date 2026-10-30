@@ -17,10 +17,11 @@ full structures spelled out under each.
 > invariant) · **W0b**: D4 append-only enforced by DB triggers (real trigger text
 > in evidence) · kill drill with fail-closed rc7 · Postgres restart ×10 ·
 > batched signed appends **~0.4–0.5 ms/row** (vs 25.8 ms/row autocommit baseline)
-> with 20,000/20,000 signatures verified — see `docs/gates/W0a.md` and
+> with 20,000/20,000 signatures verified · fan-out bench 4 cells exact-count,
+> **worst p99 1.52 ms ≤ 2 ms budget** · out-of-band watchdog (fail-closed drills,
+> live cascade detection in 140 ms) — see `docs/gates/W0a.md` and
 > `docs/gates/W0b.md` for verbatim outputs. Remaining W0b increment-level scope:
-> E-cell skeletons, watchdog binary, formal fan-out p99 bench.
-> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
+> E-cell skeletons (E1/E2/E5/E7) + L1–L4 approval flow.> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
 > **MEASURED** = real recorded output · unlabelled = a locked decision from the sessions.
 
 ---
