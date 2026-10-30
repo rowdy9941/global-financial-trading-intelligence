@@ -23,9 +23,10 @@ full structures spelled out under each.
 > 525 ns / p99 7.5 µs, fail-closed phase 4/4 refuse + 0 intents, open phase
 > 4 allows → 4 signed fills, bad_sigs 0 · **approval flow G8**: L1/L2/L3
 > ladder enforced (seat-overreach rc 8, double-decide rc 9, C8 quota 5
-> grants/week then rc 7) — see `docs/gates/W0a.md` and
-> `docs/gates/W0b.md` for verbatim outputs. **W0b complete** (G1–G8).
-> Next: B1 data gathering & quality.> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
+> grants/week then rc 7) — **W0b complete** (G1–G8). **B1 started**:
+> real 9.2y capture (BTCUSDT 1d, 3,362 bars from 2017-08-17, key-free
+> source, integrity PASS, dual-run determinism, D3 registry verified,
+> training-lock enforced) — see `docs/gates/W0b.md`, `docs/gates/B1.md`.> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
 > **MEASURED** = real recorded output · unlabelled = a locked decision from the sessions.
 
 ---

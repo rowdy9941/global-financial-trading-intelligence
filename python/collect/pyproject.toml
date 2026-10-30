@@ -1,0 +1,11 @@
+# B1 collectors — key-free source→D0 capture with integrity verification.
+# uv-managed: `uv run ...` resolves the toolchain without touching the system
+# Python (repo-wide uv policy; never pip-install into system Python).
+[project]
+name = "gfti-collect"
+version = "0.1.0"
+description = "Global financial trading intelligence — B1 data collectors"
+requires-python = ">=3.11"
+dependencies = [
+    "pyarrow>=20.0",
+]

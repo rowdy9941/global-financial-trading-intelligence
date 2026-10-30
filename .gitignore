@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 target/
+
+# D0 artifacts (regenerable captures; only manifests/paths live in D3)
+data/d0/
+python/collect/.venv/
