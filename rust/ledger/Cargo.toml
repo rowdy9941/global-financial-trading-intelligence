@@ -1,0 +1,24 @@
+[package]
+name = "ledger"
+version = "0.1.0"
+edition.workspace = true
+
+# Dependency policy note (workspace rule: std-only until a gate forces a real crate).
+# W0b's D4 ledger MUST talk to Postgres (the compose D3/D4 store) and MUST
+# sign artifact rows; a hand-rolled libpq is a correctness risk. License checks
+# done via crates.io API, not-yanked verified:
+#   postgres 0.19.14  MIT OR Apache-2.0
+#   sha2 0.11.1       MIT OR Apache-2.0
+#   hmac 0.13.0       MIT OR Apache-2.0
+#   hex 0.4.3         MIT OR Apache-2.0
+# The hot-path rail and cold d0 crates stay zero-dependency; this crate is the
+# only consumer of Postgres, and the signing code is shared nowhere else.
+
+[dependencies]
+postgres = { version = "0.19.14", default-features = false, features = [] }
+sha2 = "0.11.1"
+hmac = "0.13.0"
+hex = "0.4.3"
+
+[lints.rust]
+warnings = "deny"

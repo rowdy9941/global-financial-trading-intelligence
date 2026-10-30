@@ -8,14 +8,18 @@ in-depth plan with the complete visual diagrams** — the same 10 architecture p
 [FINOS-TRADING-PLAN.pdf](docs/plans/FINOS-TRADING-PLAN.pdf), embedded here with the
 full structures spelled out under each.
 
-> Status: **W0a in progress** (plan locked, Sessions 1–47) — MEASURED so far:
-> rail ingest contract 6/6 tests · std-only NATS client e2e 1,900/1,900 acked
-> (transit avg 220 µs · p99 1.37 ms) · fan-out proven on two filtered consumers ·
-> replay `cmp` byte-identical · hot-path bench **90 ns/row (p99 182 ns) ≈ 11.1 M
-> rows/s/core** · D0 Parquet cold store landed (deterministic byte-identical
-> dumps, read-back verified, **289 ns/row write ≈ 3.45 M rows/s**) — see
-> `docs/gates/W0a.md` for the verbatim outputs. Pins 1–2 (Compose stack) await
-> the host Docker daemon.
+> Status: **W0a DONE · W0b (ledger + kill-cascade) DONE-at-gate level** — MEASURED:
+> rail ingest contract 6/6 tests · **90 ns/row (p99 182 ns) ≈ 11.1 M rows/s/core** ·
+> batched-flush publish 2.7–3.0× · D0 Parquet **289 ns/row** · ILP encode
+> **639 ns/row** · Compose stack (Postgres 16 · QuestDB 7.4.2 · NATS 2.10) 3×
+> healthy · five D1 store gates green (500k burst exact · determinism identical ·
+> pre-warm 154 ms cold / 6.6 ms warm · restore reverts markers · 10× restart
+> invariant) · **W0b**: D4 append-only enforced by DB triggers (real trigger text
+> in evidence) · kill drill with fail-closed rc7 · Postgres restart ×10 ·
+> batched signed appends **~0.4–0.5 ms/row** (vs 25.8 ms/row autocommit baseline)
+> with 20,000/20,000 signatures verified — see `docs/gates/W0a.md` and
+> `docs/gates/W0b.md` for verbatim outputs. Remaining W0b increment-level scope:
+> E-cell skeletons, watchdog binary, formal fan-out p99 bench.
 > Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
 > **MEASURED** = real recorded output · unlabelled = a locked decision from the sessions.
 
