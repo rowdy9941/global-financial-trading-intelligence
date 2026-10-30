@@ -4,7 +4,6 @@
 //! the determinism gate can compare two independent ingests.
 
 use rail::ilp::IlpBuf;
-use std::io::Write;
 use std::net::TcpStream;
 
 fn main() {
