@@ -85,8 +85,14 @@ def normalize(rows: list[list]) -> list[dict]:
 
 
 def integrity_check(bars: list[dict], symbol: str, interval_ms_day=86_400_000):
-    """Deterministic integrity contract (fail loudly; gate replays this)."""
+    """Deterministic integrity contract (fail loudly; gate replays this).
+
+    Interior calendar holes are NOT hard failures — they are honest absence,
+    recorded as precise windows for the D3 gap calendar (the collector must
+    neither silently paper over them, nor refuse to ship the good rows).
+    """
     errs = []
+    holes = []  # contiguous missing-day spans as (first_missing_ms, last_missing_ms)
     n = len(bars)
     if n < 2:
         raise RuntimeError(f"too few bars: {n}")
@@ -95,8 +101,9 @@ def integrity_check(bars: list[dict], symbol: str, interval_ms_day=86_400_000):
         if b["open_ms"] <= prev:
             errs.append(f"non-monotonic at {b['ts_day']}")
             break
-        if b["open_ms"] - prev != interval_ms_day:
-            errs.append(f"gap before {b['ts_day']} ({(b['open_ms'] - prev) // 1000}s)")
+        if b["open_ms"] - prev > interval_ms_day:
+            # days strictly between prev and b: one contiguous span
+            holes.append((prev + interval_ms_day, b["open_ms"] - interval_ms_day))
         prev = b["open_ms"]
     now_ms = int(time.time() * 1000)
     if bars[-1]["open_ms"] > now_ms:
@@ -114,7 +121,13 @@ def integrity_check(bars: list[dict], symbol: str, interval_ms_day=86_400_000):
             break
     for b in bars:
         b["symbol"] = symbol
-    return errs, n
+    hole_rows = [{
+        "window_from": datetime.fromtimestamp(h0 / 1000, tz=timezone.utc)
+        .strftime("%Y-%m-%d"),
+        "window_to": datetime.fromtimestamp(h1 / 1000, tz=timezone.utc)
+        .strftime("%Y-%m-%d"),
+    } for h0, h1 in holes]
+    return errs, n, hole_rows
 
 
 def to_parquet(bars: list[dict], out: Path) -> dict:
@@ -139,7 +152,7 @@ def main():
     t0 = time.time()
     raw = fetch_all(args.symbol, args.interval)
     bars = normalize(raw)
-    errs, n = integrity_check(bars, args.symbol)
+    errs, n, holes = integrity_check(bars, args.symbol)
     first, last = bars[0], bars[-1]
     if errs:
         raise RuntimeError(f"INTEGRITY FAIL: {errs}")
@@ -152,6 +165,7 @@ def main():
         "source": BASE, "license": "free-attribution (binance public data)",
         "rows": n, "first_day": d0, "last_day": d1,
         "calendar_days": dts, "rows_minus_days": n - dts,
+        "holes": holes,
         **({"missing_day_list": []} if n >= dts else {}),
         "artifact": art,
         "integrity": "PASS", "fetch_seconds": round(time.time() - t0, 2),

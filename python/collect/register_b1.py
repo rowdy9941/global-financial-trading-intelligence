@@ -76,16 +76,16 @@ def main():
     # gaps (kind='missing', ops-resolved) are re-opened by the hole pass only.
     psql(f"DELETE FROM d3.gaps WHERE dataset_key = '{key}';")
 
-    # interior holes → HARD open gaps (over the whole capture window)
-    # daily bars must tile day-by-day; rows_minus_days > 0 means holes.
-    holes = s["rows"] - s["calendar_days"]
-    if holes > 0:
+    # interior holes → HARD open gaps: one row per precise missing-day span
+    # (gate G-B1.1 asserts the registry count matches the summary).
+    for h in s.get("holes", []):
         psql(f"""
             INSERT INTO d3.gaps (dataset_key, window_from, window_to, kind, status)
-            VALUES ('{key}', '{s['first_day']}T00:00:00Z', '{s['last_day']}T00:00:00Z',
-                    'missing', 'open');
-        """)  # precise windows land once a hole-finder pass is written
-    # pre-inception + live-day edges: justified, still recorded honestly
+            VALUES ('{key}', '{h['window_from']}T00:00:00Z',
+                    '{h['window_to']}T23:59:59Z', 'missing', 'open');
+        """)
+    n_holes = len(s.get("holes", []))
+    # pre-inception edge: justified (symbol listing starts at first_day)
     psql(f"""
         INSERT INTO d3.gaps (dataset_key, window_from, window_to, kind,
                              status, justification)
@@ -121,10 +121,11 @@ def main():
         WHERE dataset_key = '{key}';
         SELECT status, count(*) FROM d3.gaps WHERE dataset_key = '{key}'
         GROUP BY status ORDER BY status;
+        SELECT count(*) FROM d3.v_open_gaps WHERE dataset_key = '{key}';
     """)
     print("LEDGER-B1-REGISTER " + json.dumps({
         "dataset_key": key, "rows": s["rows"], "sha256": sha,
-        "d0_path": d0_rel, "interior_holes": holes,
+        "d0_path": d0_rel, "interior_holes": n_holes,
         "psql_verification": out.strip()[:400],
     }))
 
