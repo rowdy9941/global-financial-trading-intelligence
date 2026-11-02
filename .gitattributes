@@ -1,0 +1,9 @@
+# Normalize line endings across OSes — a Windows clone must not convert
+# LF-based sources/fixtures (SQL, TSV feeds, gates) to CRLF.
+* text=auto eol=lf
+
+# Git should never touch line endings inside these binary artifacts.
+*.png binary
+*.pdf binary
+*.parquet binary
+*.tgz binary

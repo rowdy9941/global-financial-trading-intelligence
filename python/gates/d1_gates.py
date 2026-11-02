@@ -24,7 +24,10 @@ from pathlib import Path
 HERE = Path(__file__).parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
-INGEST_BIN = REPO / "rust" / "target" / "release" / "d1_ingest"
+from _env import release_dir, scratch_dir
+
+INGEST_BIN = release_dir(REPO) / "d1_ingest"
+SCRATCH = scratch_dir()
 REST = "http://127.0.0.1:9000/exec?query="
 
 
@@ -164,7 +167,7 @@ def gate_d():
     ensure_fresh(tbl)
     ingest(100, tbl)
     before = stable_count(tbl)
-    bak = Path(scratch("qdb-gate-d.tgz")
+    bak = SCRATCH / "qdb-gate-d.tgz"
     bak.parent.mkdir(exist_ok=True)
     with open(bak, "wb") as f:
         subprocess.run(

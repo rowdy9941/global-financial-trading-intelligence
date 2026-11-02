@@ -31,6 +31,50 @@ full structures spelled out under each.
 
 ---
 
+## 0 · Run it on any OS (Windows · macOS · Linux)
+
+The whole control-plane infra is **Docker-based by design** — the same commands work
+everywhere there is [Docker Engine](https://docs.docker.com/engine/install/) or
+[Docker Desktop](https://docs.docker.com/desktop/). No OS-specific steps, no bash
+scripts, no `pip install` into system Python.
+
+**Prerequisites (all three OSes):**
+
+| Tool | Why |
+|---|---|
+| Docker Engine 24+ *or* Docker Desktop | Postgres 16 · QuestDB 7.4.2 · NATS 2.10 stack |
+| [`uv`](https://docs.astral.sh/uv/getting-started/installation/) | Python runner + dependency manager (gates, collectors, seats) |
+| [`rustup`/cargo](https://rustup.rs/) | the Rust rail (W0b components) — `cargo build --release` in `rust/` |
+
+**Same commands on every OS:**
+
+```bash
+cd compose
+cp .env.example .env              # dev-local placeholder password, edit if you like
+docker compose up -d
+docker compose ps                 # wait until all three are healthy
+
+cd ../rust && cargo build --release && cd ..   # only the gates that use the rail
+
+python3 python/gates/w0c_tasks.py     # or any gate: paths are resolved OS-portably
+```
+
+Portability notes:
+
+- Gates write scratch artifacts under the OS temp directory (`gfti-gates/`,
+  see `python/gates/_env.py`) — never a hardcoded `/tmp` path.
+- Rust binary names (`ledger_init`, `d1_ingest`, `rail`, …) resolve as `*.exe`
+  automatically on Windows (`ReleaseDir` in `_env.py`).
+- `.gitattributes` pins LF line endings so a Windows checkout cannot corrupt
+  SQL/TSV fixtures.
+- Execution-venue note: cTrader Open API is Linux/macOS/Windows-native from Python.
+  MT5 *automation* stays Windows-terminal-only (the MT5 *terminal* itself now installs
+  on macOS/Linux under Wine, but the `MetaTrader5` Python package ships Windows-only
+  wheels) — the plan's venue decision (O2 = cTrader) is what keeps this repo OS-portable.
+
+
+---
+
 ## 1 · What the system is (the one-page picture)
 
 ![Master map — three rows, one rail](docs/img/finos-p01.png)

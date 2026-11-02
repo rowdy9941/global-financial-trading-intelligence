@@ -18,7 +18,10 @@ from pathlib import Path
 HERE = Path(__file__).parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
-BIN = REPO / "rust" / "target" / "release"
+from _env import release_dir, scratch_dir
+
+BIN = release_dir(REPO)
+SCRATCH = scratch_dir()
 SQL = COMPOSE / "sql" / "001_d3_d4_init.sql"
 
 # dev-local store coordinates come from compose/.env (never from a public file)
@@ -151,13 +154,13 @@ def gate_fanout():
              ("market.spot.USDJPY", per), ("market.spot.>", n_total)]
     procs, logs = [], []
     for i, (subj, cnt) in enumerate(specs):
-        lg = open(scratch(f"w0b_fan_{i}.log", "w")
+        lg = open(SCRATCH / f"w0b_fan_{i}.log", "w")
         logs.append(lg)
         procs.append(subprocess.Popen(
             [str(BIN / "rail_sub"), subj, str(cnt), "nats://127.0.0.1:4222"],
             stdout=subprocess.DEVNULL, stderr=lg, cwd=str(REPO)))
     time.sleep(1.0)  # subscriptions bound before publish
-    feed = scratch("w0b_fan_feed.tsv"
+    feed = SCRATCH / "w0b_fan_feed.tsv"
     with open(feed, "w") as f:
         for i in range(n_total):
             sym = ["NIFTY", "SENSEX", "USDJPY", "BTC_USDT"][i % 4]
@@ -172,7 +175,7 @@ def gate_fanout():
     cells, all_ok = [], pub_ok
     worst_p99 = 0
     for i, (subj, cnt) in enumerate(specs):
-        txt = Path(scratch(f"w0b_fan_{i}.log").read_text()
+        txt = (SCRATCH / f"w0b_fan_{i}.log").read_text()
         line = [x for x in txt.splitlines() if x.startswith("WIRE-E2E ")]
         if line:
             d = json.loads(line[-1].split(" ", 1)[1])
@@ -201,7 +204,7 @@ def gate_watchdog():
     e, _ = owner_env()
     run(BIN / "ledger_init", str(SQL), env=e)
     # (a) unreachable
-    fc_log = scratch("w0b_watchdog_failclosed.log"
+    fc_log = SCRATCH / "w0b_watchdog_failclosed.log"
     p = subprocess.Popen(
         [str(BIN / "ledger_watchdog"), "--interval-ms", "200",
          "--timeout-ms", "900", "--strict"],
@@ -214,7 +217,7 @@ def gate_watchdog():
     fc_ok = (rc_fc == 7 and len(fc_ticks) >= 3
              and all('"state":"failsafe"' in x for x in fc_ticks))
     # (b) live transitions under observation
-    live_log = scratch("w0b_watchdog_live.log"
+    live_log = SCRATCH / "w0b_watchdog_live.log"
     run(BIN / "ledger_kill", "resolve", "L4", "wd-reset")   # baseline open
     p2 = subprocess.Popen(
         [str(BIN / "ledger_watchdog"), "--interval-ms", "250",
@@ -267,13 +270,14 @@ def gate_engine():
                          f"{round(base_price + i * 0.02, 2)} public\n")
 
     def run_cell_phase(tag, price_base, ts_base):
-        log = scratch(f"w0b_cell_{tag}.log"
+        log = SCRATCH / f"w0b_cell_{tag}.log"
         with open(log, "w") as fh:
             p = subprocess.Popen([str(BIN / "cell")], env=e, stdout=fh,
                                  stderr=subprocess.STDOUT, cwd=str(REPO))
         time.sleep(1.2)  # cell subscribed
-        feed(scratch(f"w0b_cell_{tag}_feed.tsv", price_base, ts_base)
-        subprocess.run([str(BIN / "rail")], stdin=open(scratch(f"w0b_cell_{tag}_feed.tsv"),
+        feed(SCRATCH / f"w0b_cell_{tag}_feed.tsv", price_base, ts_base)
+        subprocess.run([str(BIN / "rail")],
+                       stdin=open(SCRATCH / f"w0b_cell_{tag}_feed.tsv"),
                        capture_output=True, timeout=120, cwd=str(REPO))
         p.wait(timeout=60)
         return Path(log).read_text()
@@ -288,13 +292,13 @@ def gate_engine():
 
     # ---- Phase B: open → allow → E6 intent → E7 signed fill → recon ----
     run(BIN / "ledger_kill", "resolve", "L4", "W0b-engine-open", env=e)
-    with open(scratch("w0b_e7_in.txt", "w") as gfh:
+    with open(SCRATCH / "w0b_e7_in.txt", "w") as gfh:
         gfh.write("GO\n")
-    e7log = open(scratch("w0b_e7.log", "w")
+    e7log = open(SCRATCH / "w0b_e7.log", "w")
     p_e7 = subprocess.Popen([str(BIN / "e7")],
                             env=dict(e, E7_EXPECT="4", E7_SUBJECT="order.spot.>",
                                      LEDGER_SECRET_OWNER=secret),
-                            stdin=open(scratch("w0b_e7_in.txt"),
+                            stdin=open(SCRATCH / "w0b_e7_in.txt"),
                             stdout=subprocess.DEVNULL, stderr=e7log, cwd=str(REPO))
     time.sleep(1.2)
     txtB = run_cell_phase("B", 200.00, 1774000000000000000)
@@ -302,7 +306,7 @@ def gate_engine():
     e7log.close()
     summB = [x for x in txtB.splitlines() if x.startswith("LEDGER-CELL-SUMMARY")]
     sb = json.loads(summB[-1].split(" ", 1)[1]) if summB else {}
-    e7txt = Path(scratch("w0b_e7.log").read_text()
+    e7txt = (SCRATCH / "w0b_e7.log").read_text()
     e7_done = [x for x in e7txt.splitlines() if x.startswith("LEDGER-E7-DONE")]
     sev = json.loads(e7_done[-1].split(" ", 1)[1]) if e7_done else {}
     # signature verification over everything E7 signed
