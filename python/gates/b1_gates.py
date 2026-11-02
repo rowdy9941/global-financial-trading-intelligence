@@ -51,16 +51,16 @@ def run_collector(symbol: str, out_parquet: Path, summary: Path) -> dict:
 
 def collect_and_register(symbol: str, run_tag: str) -> dict:
     """Two runs + history-determinism check + register run 1 to D0/D3."""
-    par_a = Path(f"/tmp/opencode/b1_{run_tag}_1.parquet")
-    par_b = Path(f"/tmp/opencode/b1_{run_tag}_2.parquet")
-    s1 = run_collector(symbol, par_a, Path(f"/tmp/opencode/b1_{run_tag}_1.json"))
-    s2 = run_collector(symbol, par_b, Path(f"/tmp/opencode/b1_{run_tag}_2.json"))
+    par_a = Path(scratch(f"b1_{run_tag}_1.parquet")
+    par_b = Path(scratch(f"b1_{run_tag}_2.parquet")
+    s1 = run_collector(symbol, par_a, Path(scratch(f"b1_{run_tag}_1.json"))
+    s2 = run_collector(symbol, par_b, Path(scratch(f"b1_{run_tag}_2.json"))
     cmp = parquet_compare(par_a, par_b)
     artifacts_path = REPO / "data" / "d0" / "binance" / symbol / "1d.parquet"
     artifacts_path.parent.mkdir(parents=True, exist_ok=True)
     artifacts_path.write_bytes(par_a.read_bytes())
     r = subprocess.run(
-        ["uv", "run", "register_b1.py", "--summary", f"/tmp/opencode/b1_{run_tag}_1.json",
+        ["uv", "run", "register_b1.py", "--summary", scratch(f"b1_{run_tag}_1.json",
          "--d0-path", f"data/d0/binance/{symbol}/1d.parquet"],
         capture_output=True, text=True, timeout=120, cwd=str(COLLECT),
     )
@@ -174,7 +174,75 @@ def gate_capture():
     return ok
 
 
-GATES = {"CAPTURE": gate_capture}
+def gate_kraken_full_trades():
+    """Verify the downloaded archive, BTC/USD D0, and its distinct D3 row.
+
+    Deliberately refuses to initiate the multi-part archive download. The
+    operator must first place all verified parts/full ZIP under data/d0.
+    """
+    archive = REPO / "data" / "d0" / "kraken" / "archive" / "Kraken_Trades_Full.zip"
+    if not archive.is_file():
+        raise RuntimeError(
+            "Kraken full archive not present; gate will not initiate a ~28 GB download"
+        )
+    parts_check = subprocess.run(
+        ["uv", "run", "kraken_full_trades.py", "--archive-dir",
+         "../../data/d0/kraken/archive", "--archive", str(archive), "--verify-parts-only"],
+        cwd=str(COLLECT), capture_output=True, text=True, timeout=1800,
+    )
+    if parts_check.returncode:
+        raise RuntimeError(f"Kraken part checksum verification failed: {parts_check.stderr[-600:]}")
+    parts_evidence = json.loads(parts_check.stdout.strip().splitlines()[-1])
+    command = [
+        "uv", "run", "kraken_full_trades.py", "--archive", str(archive),
+        "--out", "../../data/d0/kraken/BTCUSD/trades.parquet",
+        "--summary", scratch("b1_kraken_btcusd.json", "--register",
+    ]
+    run = subprocess.run(command, cwd=str(COLLECT), capture_output=True, text=True, timeout=3600)
+    if run.returncode:
+        raise RuntimeError(f"Kraken collector/register rc={run.returncode}: {run.stderr[-600:]}")
+    summary = json.loads(Path(scratch("b1_kraken_btcusd.json").read_text())
+    key = "kraken/BTCUSD/trades"
+    row = psql(
+        f"SELECT CASE WHEN rows={int(summary['rows'])} THEN 'ROWS_MATCH' "
+        "ELSE 'ROWS_MISMATCH' END AS gate_rows, sha256, "
+        "CASE WHEN verified THEN 'VERIFIED_TRUE' "
+        "ELSE 'VERIFIED_FALSE' END AS gate_verified FROM d3.datasets "
+        f"WHERE dataset_key='{key}';"
+    )
+    gaps = psql(
+        "SELECT CASE WHEN count(*)=0 THEN 'clear' ELSE 'blocked' END "
+        "FROM d3.gaps "
+        f"WHERE dataset_key='{key}' AND status='open' AND justification='';"
+    )
+    registry_ok = (
+        summary["dataset_key"] == key
+        and summary["archive_sha256"] == "5f5affd6c341366cdc5db290beaf281b8e362fd650bc9273aac6defdcaa98018"
+        and parts_evidence["parts_verified"] == 14
+        and parts_evidence["archive_sha256"] == summary["archive_sha256"]
+        and summary["coverage_to"] == "2026-09-30T23:59:59Z"
+        and summary["tick_gap_semantics"].startswith("No time-bucket gaps inferred")
+        and summary["license"] == "publicly downloadable; reuse/redistribution rights unestablished"
+        and summary["artifact"]["sha256"] in row
+        and "ROWS_MATCH" in row
+        and "VERIFIED_TRUE" in row
+        and "clear" in gaps
+    )
+    print("B1-GATE-KRAKEN-FULL-TRADES " + json.dumps({
+        "dataset_key": key, "rows": summary["rows"],
+        "coverage_to": summary["coverage_to"],
+        "archive_sha256": summary["archive_sha256"],
+        "parts_verified": parts_evidence["parts_verified"],
+        "artifact_sha256": summary["artifact"]["sha256"],
+        "registry_rows_match": "ROWS_MATCH" in row,
+        "registry_verified": "VERIFIED_TRUE" in row,
+        "unjustified_open_gaps": "clear" not in gaps,
+        "ok": registry_ok,
+    }))
+    return registry_ok
+
+
+GATES = {"CAPTURE": gate_capture, "KRAKEN_FULL_TRADES": gate_kraken_full_trades}
 
 if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else "CAPTURE"

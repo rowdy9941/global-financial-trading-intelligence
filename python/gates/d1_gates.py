@@ -164,7 +164,7 @@ def gate_d():
     ensure_fresh(tbl)
     ingest(100, tbl)
     before = stable_count(tbl)
-    bak = Path("/tmp/opencode/qdb-gate-d.tgz")
+    bak = Path(scratch("qdb-gate-d.tgz")
     bak.parent.mkdir(exist_ok=True)
     with open(bak, "wb") as f:
         subprocess.run(
