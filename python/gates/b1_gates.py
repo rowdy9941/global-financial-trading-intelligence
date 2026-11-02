@@ -28,6 +28,9 @@ SQL003 = COMPOSE / "sql" / "003_b1_data_plane.sql"
 # short alias to reuse the w0b harness plumbing where it fits
 sys.path.insert(0, str(HERE))
 import w0b_gates as w0b  # noqa: E402 — same box, shared compose/_pg_url helpers
+from _env import scratch_dir  # noqa: E402 — OS-portable scratch locations
+
+SCRATCH = scratch_dir()
 
 
 def psql(sql: str):
@@ -51,16 +54,16 @@ def run_collector(symbol: str, out_parquet: Path, summary: Path) -> dict:
 
 def collect_and_register(symbol: str, run_tag: str) -> dict:
     """Two runs + history-determinism check + register run 1 to D0/D3."""
-    par_a = Path(scratch(f"b1_{run_tag}_1.parquet")
-    par_b = Path(scratch(f"b1_{run_tag}_2.parquet")
-    s1 = run_collector(symbol, par_a, Path(scratch(f"b1_{run_tag}_1.json"))
-    s2 = run_collector(symbol, par_b, Path(scratch(f"b1_{run_tag}_2.json"))
+    par_a = SCRATCH / f"b1_{run_tag}_1.parquet"
+    par_b = SCRATCH / f"b1_{run_tag}_2.parquet"
+    s1 = run_collector(symbol, par_a, SCRATCH / f"b1_{run_tag}_1.json")
+    s2 = run_collector(symbol, par_b, SCRATCH / f"b1_{run_tag}_2.json")
     cmp = parquet_compare(par_a, par_b)
     artifacts_path = REPO / "data" / "d0" / "binance" / symbol / "1d.parquet"
     artifacts_path.parent.mkdir(parents=True, exist_ok=True)
     artifacts_path.write_bytes(par_a.read_bytes())
     r = subprocess.run(
-        ["uv", "run", "register_b1.py", "--summary", scratch(f"b1_{run_tag}_1.json",
+        ["uv", "run", "register_b1.py", "--summary", str(SCRATCH / f"b1_{run_tag}_1.json"),
          "--d0-path", f"data/d0/binance/{symbol}/1d.parquet"],
         capture_output=True, text=True, timeout=120, cwd=str(COLLECT),
     )
@@ -196,12 +199,12 @@ def gate_kraken_full_trades():
     command = [
         "uv", "run", "kraken_full_trades.py", "--archive", str(archive),
         "--out", "../../data/d0/kraken/BTCUSD/trades.parquet",
-        "--summary", scratch("b1_kraken_btcusd.json", "--register",
+        "--summary", str(SCRATCH / "b1_kraken_btcusd.json"), "--register",
     ]
     run = subprocess.run(command, cwd=str(COLLECT), capture_output=True, text=True, timeout=3600)
     if run.returncode:
         raise RuntimeError(f"Kraken collector/register rc={run.returncode}: {run.stderr[-600:]}")
-    summary = json.loads(Path(scratch("b1_kraken_btcusd.json").read_text())
+    summary = json.loads((SCRATCH / "b1_kraken_btcusd.json").read_text())
     key = "kraken/BTCUSD/trades"
     row = psql(
         f"SELECT CASE WHEN rows={int(summary['rows'])} THEN 'ROWS_MATCH' "
