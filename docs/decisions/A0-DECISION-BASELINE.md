@@ -125,4 +125,5 @@ No gate can be waived by plan text; a green CI badge is not a gate pass.
 
 | Date | Decision | Evidence |
 |---|---|---|
+| 2026-11-03 | P1 intraday dataset registered: `hyperliquid/BTC-USDC/1m` (4,320 real bars, 0 missing, verified via the B-GATE gap rule); measured API retention (1m ≈ 3 days) recorded — historical intraday backfill impossible, PIT accumulation now runs via `scripts/hl_capture.sh` | `docs/gates/P1-DATA.md` |
 | 2026-11-03 | Baseline created; Nautilus conflicts reconciled (§3); pilots frozen (§4); OS tiers declared (§2); catalog truth pinned (§5); repo truth map (§6); gates formalized (§7) | this doc |

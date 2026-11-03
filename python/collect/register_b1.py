@@ -172,6 +172,11 @@ def main():
     a.add_argument("--volume-kind", default=None, help="source meaning of volume")
     a.add_argument("--volume-unit", default=None, help="unit used by source volume")
     a.add_argument("--schema-version", default=None)
+    a.add_argument(
+        "--pre-inception-note",
+        default=None,
+        help="truthful justification for the pre-first_day gap; defaults to the\n        BTC spot-history wording. A dataset whose real reason differs (e.g.\n        intraday API retention) MUST supply its own — the default is a claim\n        about history that may not exist for this key",
+    )
     args = a.parse_args()
 
     s = validated(json.loads(Path(args.summary).read_text()))
@@ -248,7 +253,17 @@ def main():
                     '{h["window_to"]}T23:59:59Z', 'missing', 'open');
         """)
     n_holes = len(s.get("holes", []))
-    # pre-inception edge: justified (symbol listing starts at first_day)
+    # pre-inception edge: justified (symbol listing starts at first_day).
+    # The note is the registry's evidence for WHY nothing predates first_day;
+    # a misleading note is worse than no row, so callers may (and for intraday
+    # captures must) supply their own truthful text.
+    pre_note = args.pre_inception_note or (
+        "pre-inception interval 2010..2017-08-16 (symbol listing starts "
+        f"{s['first_day']}; deeper BTC history tracked in another "
+        "dataset row - TODO(11) Kraken/ItBit archives)"
+    )
+    if "'" in pre_note or ";" in pre_note:
+        raise SystemExit("--pre-inception-note must not contain quotes/semicolons")
     psql(f"""
         INSERT INTO d3.gaps (dataset_key, window_from, window_to, kind,
                              status, justification)
@@ -256,9 +271,7 @@ def main():
                 '2010-01-01T00:00:00Z',
                 '{s["first_day"]}T00:00:00Z'::timestamptz - interval '1 day',
                 'exchange-closed', 'justified',
-                'pre-inception interval 2010..2017-08-16 (symbol listing starts '
-                '{s["first_day"]}; deeper BTC history tracked in another '
-                'dataset row - TODO(11) Kraken/ItBit archives)');
+                '{pre_note}');
     """)
     psql(f"""
         INSERT INTO d3.gaps (dataset_key, window_from, window_to, kind,

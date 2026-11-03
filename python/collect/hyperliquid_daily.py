@@ -319,6 +319,11 @@ def to_parquet(bars: list[dict], out: Path) -> dict:
 def main() -> None:
     a = argparse.ArgumentParser()
     a.add_argument("--coin", required=True)
+    a.add_argument(
+        "--symbol",
+        default=None,
+        help="identity override for the summary/registry (default <coin>-USD);\n        the Hyperliquid perp quotes in USDC, so P1 registers BTC-USDC — an\n        explicit identity, never a post-hoc rename of an existing dataset",
+    )
     a.add_argument("--interval", default="1d", choices=sorted(VALID_INTERVALS))
     a.add_argument("--out", required=True)
     a.add_argument("--summary", default=None)
@@ -375,7 +380,7 @@ def main() -> None:
     d0, d1 = bars[0]["ts_day"], bars[-1]["ts_day"]
     calendar_days = (datetime.fromisoformat(d1) - datetime.fromisoformat(d0)).days + 1
     summary = {
-        "symbol": f"{args.coin}-USD",
+        "symbol": args.symbol or f"{args.coin}-USD",
         "interval": args.interval,
         "source": BASE,
         "license": LESSEE,
