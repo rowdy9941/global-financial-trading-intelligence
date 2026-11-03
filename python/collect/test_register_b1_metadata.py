@@ -113,3 +113,28 @@ def test_daily_registration_keeps_legacy_metadata_defaults() -> None:
         "volume_unit": None,
         "schema_version": "1",
     }
+
+
+def test_default_pre_inception_note_satisfies_its_own_sql_guard() -> None:
+    """Regression: the default note once contained ';' and was rejected by the
+    guard, breaking every plain (non-intraday) registration."""
+    from register_b1 import pre_inception_note
+
+    note = pre_inception_note(None, "2017-08-17")
+    assert "2017-08-17" in note
+    assert ";" not in note and "'" not in note
+
+
+def test_explicit_pre_inception_note_is_used_verbatim() -> None:
+    from register_b1 import pre_inception_note
+
+    note = "public API retains only ~3 days of 1m, so nothing earlier exists"
+    assert pre_inception_note(note, "2026-10-31") == note
+
+
+def test_pre_inception_note_rejects_sql_relevant_characters() -> None:
+    from register_b1 import pre_inception_note
+
+    for bad in ("oops; DROP TABLE d3.gaps", "it's wrong"):
+        with pytest.raises(SystemExit):
+            pre_inception_note(bad, "2026-11-01")

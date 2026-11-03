@@ -153,6 +153,25 @@ def psql(sql: str) -> str:
     return r.stdout
 
 
+def pre_inception_note(explicit: str | None, first_day: str) -> str:
+    """Justification text for the pre-first_day window.
+
+    This note is the registry's evidence for WHY nothing predates first_day: a
+    misleading note is worse than no row, so a caller whose real reason differs
+    (intraday API retention, a derived lineage) MUST supply its own. Whatever
+    is used is interpolated into SQL, so quotes/semicolons are refused — and
+    the DEFAULT has to satisfy that same guard, or every plain capture breaks.
+    """
+    note = explicit or (
+        "pre-inception interval 2010..2017-08-16 (symbol listing starts "
+        f"{first_day}, deeper BTC history tracked in another "
+        "dataset row - TODO(11) Kraken/ItBit archives)"
+    )
+    if "'" in note or ";" in note:
+        raise SystemExit("--pre-inception-note must not contain quotes/semicolons")
+    return note
+
+
 def main():
     a = argparse.ArgumentParser()
     a.add_argument("--summary", required=True)
@@ -254,16 +273,7 @@ def main():
         """)
     n_holes = len(s.get("holes", []))
     # pre-inception edge: justified (symbol listing starts at first_day).
-    # The note is the registry's evidence for WHY nothing predates first_day;
-    # a misleading note is worse than no row, so callers may (and for intraday
-    # captures must) supply their own truthful text.
-    pre_note = args.pre_inception_note or (
-        "pre-inception interval 2010..2017-08-16 (symbol listing starts "
-        f"{s['first_day']}; deeper BTC history tracked in another "
-        "dataset row - TODO(11) Kraken/ItBit archives)"
-    )
-    if "'" in pre_note or ";" in pre_note:
-        raise SystemExit("--pre-inception-note must not contain quotes/semicolons")
+    pre_note = pre_inception_note(args.pre_inception_note, s["first_day"])
     psql(f"""
         INSERT INTO d3.gaps (dataset_key, window_from, window_to, kind,
                              status, justification)
