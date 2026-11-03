@@ -1,0 +1,70 @@
+# A0 gate 8 — per-OS toolchain matrix. Gates needing the D0 archive (W1 replay)
+# run on the prod box only; CI keeps cargo+python+SQL-idempotence checks.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]  # tier A; add macos/windows runners as tiers B/C come online
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - name: fmt
+        working-directory: rust
+        run: cargo fmt --all -- --check
+      - name: clippy
+        working-directory: rust
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: test
+        working-directory: rust
+        run: cargo test --all --all-features
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: train lane
+        working-directory: python/train
+        run: uv run pytest -q
+      - name: collect lane
+        working-directory: python/train
+        run: uv run pytest -q ../collect/test_nse_fo_bhavcopy.py ../collect/test_register_b1_metadata.py
+
+  sql-idempotence:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: gfti
+          POSTGRES_USER: gfti_app
+          POSTGRES_PASSWORD: ci-local-only
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: apply 001-006 twice (idempotent migrations must not error)
+        run: |
+          for i in 1 2; do
+            for f in compose/sql/001_d3_d4_init.sql compose/sql/002_w0b_approval_flow.sql \
+                     compose/sql/003_b1_data_plane.sql compose/sql/004_w0c_llm_tasks.sql \
+                     compose/sql/005_w1_artifacts.sql compose/sql/006_d3_intraday_metadata.sql; do
+              docker run --rm -v "$PWD/compose/sql:/sql:ro" \
+                --network host \
+                -e PGPASSWORD=ci-local-only postgres:17 \
+                psql -h 127.0.0.1 -U gfti_app -d gfti -v ON_ERROR_STOP=1 -f "/sql/$(basename $f)" || exit 1
+            done
+          done
