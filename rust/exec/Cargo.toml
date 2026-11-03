@@ -14,5 +14,9 @@ edition.workspace = true
 [dependencies]
 govern = { path = "../govern" }
 
+[dev-dependencies]
+evaluate = { path = "../evaluate" }
+featurize = { path = "../featurize" }
+
 [lints.rust]
 warnings = "deny"
