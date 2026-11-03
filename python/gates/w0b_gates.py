@@ -40,7 +40,7 @@ def owner_env(role_secret=None):
     """Per-run ephemeral dev secret (never a repo constant; owner production
     secrets come from the owner-side secret store at deploy time)."""
     s = role_secret or ("dev-w0b-" + os.urandom(12).hex())
-    return dict(LEDGER_ENV, **{"LEDGER_SECRET_OWNER": s}), s
+    return dict(LEDGER_ENV, LEDGER_SECRET_OWNER=s), s
 
 def run(b, *args, env=None, need_rc=0):
     e = env or LEDGER_ENV
@@ -265,9 +265,8 @@ def gate_engine():
 
     def feed(path, base_price, base_ts):
         with open(path, "w") as fh:
-            for i in range(220):
-                fh.write(f"NIFTY {base_ts + i * 1_000_000_000} "
-                         f"{round(base_price + i * 0.02, 2)} public\n")
+            fh.writelines(f"NIFTY {base_ts + i * 1_000_000_000} "
+                         f"{round(base_price + i * 0.02, 2)} public\n" for i in range(220))
 
     def run_cell_phase(tag, price_base, ts_base):
         log = SCRATCH / f"w0b_cell_{tag}.log"

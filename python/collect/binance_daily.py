@@ -23,7 +23,7 @@ import json
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 BASE = "https://data-api.binance.vision/api/v3/klines"
@@ -44,7 +44,7 @@ def fetch_all(symbol: str, interval: str) -> list[list]:
             try:
                 raw = urllib.request.urlopen(url, timeout=60).read()
                 break
-            except Exception as e:  # noqa: BLE001 — retry with backoff
+            except Exception as e:
                 if attempt == 4:
                     raise RuntimeError(f"fetch fail {url}: {e}") from e
                 time.sleep(2 ** attempt + 1)
@@ -73,7 +73,7 @@ def normalize(rows: list[list]) -> list[dict]:
             "symbol": None,  # set by caller
             "open_ms": open_ms,
             "close_ms": int(r[6]),
-            "ts_day": (datetime.fromtimestamp(open_ms / 1000, tz=timezone.utc)
+            "ts_day": (datetime.fromtimestamp(open_ms / 1000, tz=UTC)
                        .strftime("%Y-%m-%d")),
             "open": float(r[1]), "high": float(r[2]),
             "low": float(r[3]),  "close": float(r[4]),
@@ -122,16 +122,17 @@ def integrity_check(bars: list[dict], symbol: str, interval_ms_day=86_400_000):
     for b in bars:
         b["symbol"] = symbol
     hole_rows = [{
-        "window_from": datetime.fromtimestamp(h0 / 1000, tz=timezone.utc)
+        "window_from": datetime.fromtimestamp(h0 / 1000, tz=UTC)
         .strftime("%Y-%m-%d"),
-        "window_to": datetime.fromtimestamp(h1 / 1000, tz=timezone.utc)
+        "window_to": datetime.fromtimestamp(h1 / 1000, tz=UTC)
         .strftime("%Y-%m-%d"),
     } for h0, h1 in holes]
     return errs, n, hole_rows
 
 
 def to_parquet(bars: list[dict], out: Path) -> dict:
-    from pyarrow import Table, parquet as pq
+    from pyarrow import Table
+    from pyarrow import parquet as pq
     keys = ["symbol", "ts_day", "open_ms", "close_ms",
             "open", "high", "low", "close", "volume", "close_qvol", "n_trades"]
     t = Table.from_pylist([{k: b[k] for k in keys} for b in bars])

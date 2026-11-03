@@ -6,9 +6,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 import histdata_daily as hd
+import pytest
 
 M1_TEXT = """20260102 170000;2062.598000;2064.525000;2062.405000;2064.235000;0
 20260102 170100;2063.795000;2064.135000;2063.435000;2064.125000;0

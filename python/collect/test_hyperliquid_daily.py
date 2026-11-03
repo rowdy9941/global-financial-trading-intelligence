@@ -7,9 +7,8 @@ from datetime import UTC
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 import hyperliquid_daily as hl
+import pytest
 
 DAY = hl.VALID_INTERVALS["1d"]
 

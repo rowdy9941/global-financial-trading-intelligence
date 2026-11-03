@@ -15,8 +15,6 @@ import json
 import subprocess
 import sys
 import time
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -27,8 +25,8 @@ SQL003 = COMPOSE / "sql" / "003_b1_data_plane.sql"
 
 # short alias to reuse the w0b harness plumbing where it fits
 sys.path.insert(0, str(HERE))
-import w0b_gates as w0b  # noqa: E402 — same box, shared compose/_pg_url helpers
-from _env import scratch_dir  # noqa: E402 — OS-portable scratch locations
+import w0b_gates as w0b
+from _env import scratch_dir
 
 SCRATCH = scratch_dir()
 
