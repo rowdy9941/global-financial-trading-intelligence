@@ -10,70 +10,18 @@
 //! * E6 route — publish `order.spot.<SYM>` intent (parsed by E7).
 //! * E7 ledger — separate process (order.* → signed D4 fills).
 
-use std::collections::VecDeque;
+// E1 landed in its own crate: runtime window featurizer driven by the
+// D5-signed constant set (see featurize + evaluate). The engine re-exports
+// the SAME implementation with the skeleton defaults, so every cell, gate,
+// and test keeps referring to a single E1.
+pub use featurize::{Features, Featurizer, Frozen};
 
-/// E2 constants — skeleton "frozen artifact".
+/// E2 skeleton constants (the dev "frozen artifact" — replaced by
+/// evaluate::verify + Frozen at boot once the hot path awaits).
 pub const FAST_LEN: usize = 5;
 pub const SLOW_LEN: usize = 20;
 pub const EPS: f64 = 1e-4;
 
-/// E1 — per-symbol featurizer: two ring SMAs (fast/slow) + last price.
-#[derive(Debug)]
-pub struct Featurizer {
-    fast: VecDeque<f64>,
-    slow: VecDeque<f64>,
-    last: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Features {
-    pub sma_fast: f64,
-    pub sma_slow: f64,
-    pub last: f64,
-}
-
-impl Default for Featurizer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Featurizer {
-    pub fn new() -> Self {
-        Self {
-            fast: VecDeque::with_capacity(FAST_LEN),
-            slow: VecDeque::with_capacity(SLOW_LEN),
-            last: 0.0,
-        }
-    }
-
-    /// E1 update: O(1) amortized. Returns Some(features) once warm.
-    pub fn on_tick(&mut self, px: f64) -> Option<Features> {
-        self.last = px;
-        self.fast.push_back(px);
-        if self.fast.len() > FAST_LEN {
-            self.fast.pop_front();
-        }
-        self.slow.push_back(px);
-        if self.slow.len() > SLOW_LEN {
-            self.slow.pop_front();
-        }
-        if self.fast.len() < FAST_LEN || self.slow.len() < SLOW_LEN {
-            return None; // pre-warming; no decisions until warm
-        }
-        Some(Features {
-            sma_fast: self.fast.iter().sum::<f64>() / FAST_LEN as f64,
-            sma_slow: self.slow.iter().sum::<f64>() / SLOW_LEN as f64,
-            last: px,
-        })
-    }
-}
-
-// E5 govern lives in the standalone `govern` crate now; the EXACT interface
-// (Action / Verdict / govern signature) is re-exported so the cell binary and
-// the W0b/W1 gate semantics are unchanged — Action/Verdict are the SAME types
-// everywhere (single pre-trade vocabulary). E2's evaluate targets that Action;
-// intent_payload and cell.rs keep compiling untouched.
 pub use govern::{Action, Verdict, govern};
 
 /// E2 — evaluate (skeleton rule over the shared Action vocabulary).

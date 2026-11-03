@@ -60,7 +60,7 @@ fn main() {
         eprintln!("cell: subscribe fail: {e}"); std::process::exit(2);
     }
 
-    let mut feats = Featurizer::new();
+    let mut feats = Featurizer::skeleton();
     let mut symsubj = String::new();
     let mut payload: Vec<u8> = Vec::new();
     let mut ticks = 0u64;
@@ -80,7 +80,7 @@ fn main() {
         if f.len() < 3 { continue; }
         let Ok(px) = f[2].parse::<f64>() else { continue };
         ticks += 1;
-        let Some(feat) = feats.on_tick(px) else { continue; };
+        let Some(feat) = feats.push(px) else { continue; };
         warm_ticks += 1;
         if !warm_ticks.is_multiple_of(decide_every) { continue; }
 

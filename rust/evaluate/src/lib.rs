@@ -39,13 +39,10 @@ impl std::fmt::Display for VerifyError {
 
 impl std::error::Error for VerifyError {}
 
-/// E2 frozen constants handed to the hot path.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Frozen {
-    pub fast: usize,
-    pub slow: usize,
-    pub eps: f64,
-}
+// E1 frozen feature parameters the loader hands to the hot path. The
+// featurize crate owns the struct (std-only there); this crate re-exports it
+// so the signed-artifact loader and the E1 engine share one type.
+pub use featurize::Frozen;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Artifact {

@@ -1,0 +1,16 @@
+[package]
+name = "featurize"
+version = "0.1.0"
+edition.workspace = true
+
+# E1 featurize (A0 baseline §3) — feature computation for the pre-trade path.
+# Std-only (hot-path zero-dep policy). The frozen parameters that drive feature
+# windows come from a D5-signed artifact (evaluate::verify) — evaluate depends
+# on THIS crate, never the reverse, so the hot path links no parsing stack.
+# Window sums use the engine skeleton's exact op order (window re-iteration),
+# so features are bit-identical with the W0b/W1-proven dev path.
+
+[dependencies]
+
+[lints.rust]
+warnings = "deny"
