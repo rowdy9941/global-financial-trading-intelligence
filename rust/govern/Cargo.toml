@@ -1,0 +1,16 @@
+[package]
+name = "govern"
+version = "0.1.0"
+edition.workspace = true
+
+# E5 governor (blueprint §6, A0 baseline §3 rows) — the DETERMINISTIC pre-trade
+# ladder. Std-only: the hot-path zero-dep policy holds (no gate has forced a
+# dep here). Fail-closed rule #1: risk_allowed=false REFUSES, never defaults
+# to allow. The engine crate re-exports these types for its cell binary.
+
+[dependencies]
+
+[dev-dependencies]
+
+[lints.rust]
+warnings = "deny"

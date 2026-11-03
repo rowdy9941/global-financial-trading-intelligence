@@ -69,14 +69,14 @@ impl Featurizer {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Action {
-    Buy,
-    Sell,
-    None,
-}
+// E5 govern lives in the standalone `govern` crate now; the EXACT interface
+// (Action / Verdict / govern signature) is re-exported so the cell binary and
+// the W0b/W1 gate semantics are unchanged — Action/Verdict are the SAME types
+// everywhere (single pre-trade vocabulary). E2's evaluate targets that Action;
+// intent_payload and cell.rs keep compiling untouched.
+pub use govern::{Action, Verdict, govern};
 
-/// E2 — evaluate (skeleton rule).
+/// E2 — evaluate (skeleton rule over the shared Action vocabulary).
 pub fn evaluate(f: &Features) -> Action {
     if f.sma_fast > f.sma_slow * (1.0 + EPS) {
         Action::Buy
@@ -96,29 +96,4 @@ pub fn intent_payload(side: &Action, qty: f64, px: f64, decision_id: u64) -> Str
         Action::None => "hold",
     };
     format!("{side} {qty:.8} {px:.8} {decision_id}")
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Verdict {
-    Allow { side: Action, qty: f64 },
-    RefuseKill,
-    RefuseSize { max: f64 },
-    NoSignal,
-}
-
-/// E5 — govern: kill first (fail-closed), then deterministic size cap.
-/// Sizing skeleton is flat 1.0; the real sizing ladder lands in W3.
-pub fn govern(action: &Action, risk_allowed: bool, max_qty: f64) -> Verdict {
-    if !risk_allowed {
-        return Verdict::RefuseKill;
-    }
-    let a = match action {
-        Action::None => return Verdict::NoSignal,
-        a => a,
-    };
-    let qty = 1.0;
-    if !(qty > 0.0 && qty <= max_qty && qty.is_finite()) {
-        return Verdict::RefuseSize { max: max_qty };
-    }
-    Verdict::Allow { side: a.clone(), qty }
 }

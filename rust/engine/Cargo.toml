@@ -9,6 +9,7 @@ edition.workspace = true
 
 [dependencies]
 rail = { path = "../rail" }
+govern = { path = "../govern" }
 ledger = { path = "../ledger" }
 
 [lints.rust]

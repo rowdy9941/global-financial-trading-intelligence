@@ -311,6 +311,7 @@ dependencies = [
 name = "engine"
 version = "0.1.0"
 dependencies = [
+ "govern",
  "ledger",
  "rail",
 ]
@@ -412,6 +413,10 @@ dependencies = [
  "r-efi 6.0.0",
  "rand_core",
 ]
+
+[[package]]
+name = "govern"
+version = "0.1.0"
 
 [[package]]
 name = "half"
