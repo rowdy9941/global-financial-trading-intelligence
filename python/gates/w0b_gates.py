@@ -57,7 +57,7 @@ def q(sql):
 def psql_exec(sql, want_fail=False):
     r = subprocess.run(
         ["docker", "compose", "exec", "-T", "postgres",
-         "psql", "-U", "gfti_app", "-d", "gfti", "-c", sql],
+         "psql", "-U", "gfti_app", "-d", "gfti", "-A", "-t", "-c", sql],
         capture_output=True, text=True, timeout=60, cwd=str(COMPOSE),
     )
     if want_fail:
