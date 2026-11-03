@@ -27,18 +27,89 @@ REPO = Path(__file__).resolve().parents[2]  # repo root
 # Registry fields are interpolated into SQL by design (psql-only channel, no
 # DB driver dep). Every field is validated against a fixed shape BEFORE
 # interpolation; a handcrafted --summary file cannot smuggle SQL text.
-_IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/+-]{0,127}\Z")
+# (`:` is allowed because absolute URLs are a legal source value; the
+# injection-relevant characters — quotes — stay rejected by fullmatch.)
+_IDENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:+-]{0,127}\Z")
+# license family strings carry spaces/parens ("open_free_attribution (x)")
+# but never quotes/backslashes/semicolons — still single-quote-safe
+_LICENSE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._(:)-]{0,127}\Z")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
+_DAILY_INTERVALS = {"1d", "1day", "day"}
+
+
+def validate_metadata(
+    *,
+    interval: str,
+    volume_available: bool | None,
+    volume_kind: str | None,
+    volume_unit: str | None,
+    schema_version: str | None,
+) -> dict:
+    """Validate new D3 metadata, requiring explicit volume fields intraday."""
+    is_daily = interval.lower() in _DAILY_INTERVALS
+    if volume_available is True and (not volume_kind or not volume_unit):
+        raise SystemExit(
+            "volume_available=true requires nonempty volume_kind and volume_unit"
+        )
+    if not is_daily and (
+        volume_available is None or not volume_kind or not volume_unit
+    ):
+        raise SystemExit(
+            "intraday registration requires explicit volume metadata "
+            "(--volume-available, --volume-kind, and --volume-unit)"
+        )
+    if volume_available is None:
+        volume_available = False
+    for name, value in (("volume_kind", volume_kind), ("volume_unit", volume_unit)):
+        if value is not None and value and not _IDENT.fullmatch(value):
+            raise SystemExit(
+                f"metadata field {name!r} failed identity regex: {value!r}"
+            )
+    schema_version = schema_version or "1"
+    if not _IDENT.fullmatch(schema_version):
+        raise SystemExit(
+            f"metadata field 'schema_version' failed identity regex: {schema_version!r}"
+        )
+    return {
+        "volume_available": volume_available,
+        "volume_kind": volume_kind or None,
+        "volume_unit": volume_unit or None,
+        "schema_version": schema_version,
+    }
+
+
+def metadata_update_clause(
+    *,
+    volume_available_provided: bool,
+    volume_kind_provided: bool,
+    volume_unit_provided: bool,
+    schema_version_provided: bool,
+) -> str:
+    """Return UPSERT assignments for only fields explicitly supplied."""
+    updates = []
+    if volume_kind_provided:
+        updates.append("volume_kind = EXCLUDED.volume_kind")
+    if volume_unit_provided:
+        updates.append("volume_unit = EXCLUDED.volume_unit")
+    if volume_available_provided:
+        updates.append("volume_available = EXCLUDED.volume_available")
+    if schema_version_provided:
+        updates.append("schema_version = EXCLUDED.schema_version")
+    return f", {', '.join(updates)}" if updates else ""
 
 
 def validated(s: dict) -> dict:
     """Validate every summary field that reaches SQL, failing loud."""
     out = dict(s)
-    for name in ("symbol", "interval", "source", "license"):
+    for name in ("symbol", "interval", "source"):
         value = str(out[name])
         if not _IDENT.fullmatch(value):
             raise SystemExit(f"summary field {name!r} failed identity regex: {value!r}")
+    if not _LICENSE.fullmatch(str(out["license"])):
+        raise SystemExit(
+            f"summary field 'license' failed license regex: {out['license']!r}"
+        )
     for name in ("first_day", "last_day"):
         value = str(out[name])
         if not _DATE.fullmatch(value):
@@ -86,10 +157,34 @@ def main():
     a = argparse.ArgumentParser()
     a.add_argument("--summary", required=True)
     a.add_argument("--d0-path", required=True)
+    a.add_argument(
+        "--data-class",
+        default="binance",
+        choices=["binance", "hyperliquid", "kraken", "nse_fo", "histdata"],
+        help="registry dataset_key prefix = <data-class>/<symbol>/<interval>",
+    )
+    a.add_argument(
+        "--volume-available",
+        choices=("true", "false"),
+        default=None,
+        help="whether the source provides usable volume; required for intraday",
+    )
+    a.add_argument("--volume-kind", default=None, help="source meaning of volume")
+    a.add_argument("--volume-unit", default=None, help="unit used by source volume")
+    a.add_argument("--schema-version", default=None)
     args = a.parse_args()
 
     s = validated(json.loads(Path(args.summary).read_text()))
-    key = f"binance/{s['symbol']}/{s['interval']}"
+    metadata = validate_metadata(
+        interval=s["interval"],
+        volume_available=(
+            None if args.volume_available is None else args.volume_available == "true"
+        ),
+        volume_kind=args.volume_kind,
+        volume_unit=args.volume_unit,
+        schema_version=args.schema_version,
+    )
+    key = f"{args.data_class}/{s['symbol']}/{s['interval']}"
     d0 = Path(args.d0_path)
     sha = s["artifact"]["sha256"]
     if not _SHA.fullmatch(str(sha)):
@@ -114,19 +209,29 @@ def main():
             f"sha mismatch: summary says {sha}, on disk {on_disk} ({cand})"
         )
 
+    metadata_update = metadata_update_clause(
+        volume_available_provided=args.volume_available is not None,
+        volume_kind_provided=args.volume_kind is not None,
+        volume_unit_provided=args.volume_unit is not None,
+        schema_version_provided=args.schema_version is not None,
+    )
     psql(f"""
         INSERT INTO d3.datasets (dataset_key, source, license_class, granularity,
                                  expected_from, expected_to, d0_path, rows,
-                                 sha256, captured_at, verified)
+                                 sha256, captured_at, verified, volume_kind,
+                                 volume_unit, volume_available, schema_version)
         VALUES ('{key}', '{s["source"]}', '{s["license"]}', '{s["interval"]}',
                 '{s["first_day"]}T00:00:00Z', '{s["last_day"]}T00:00:00Z',
-                '{d0_rel}', {s["rows"]}, '{sha}', now(), FALSE)
+                '{d0_rel}', {s["rows"]}, '{sha}', now(), FALSE,
+                {"NULL" if metadata["volume_kind"] is None else f"'{metadata['volume_kind']}'"},
+                {"NULL" if metadata["volume_unit"] is None else f"'{metadata['volume_unit']}'"},
+                {str(metadata["volume_available"]).upper()}, '{metadata["schema_version"]}')
         ON CONFLICT (dataset_key) DO UPDATE SET
             source = EXCLUDED.source, license_class = EXCLUDED.license_class,
             granularity = EXCLUDED.granularity,
             expected_from = EXCLUDED.expected_from, expected_to = EXCLUDED.expected_to,
             d0_path = EXCLUDED.d0_path, rows = EXCLUDED.rows, sha256 = EXCLUDED.sha256,
-            captured_at = now();
+            captured_at = now(){metadata_update};
     """)
 
     # idempotent registry refresh: a new capture REPLACES this dataset's
