@@ -41,6 +41,9 @@ if $VERIFY; then
     echo "[--verify] W1 gates (WF + ARTIFACT + REPLAY)"
     ( cd "$REPO/python/train" && uv run python3 "$REPO/python/gates/w1_gates.py" ALL ) \
         || { echo "INSTALL VERIFY FAILED — see gate output above"; exit 1; }
+    echo "[--verify] G-PILOT-E2E (P1/P2/P3 fixture spine)"
+    ( cd "$REPO/python/train" && uv run python3 "$REPO/python/gates/pilot_e2e.py" ALL ) \
+        || { echo "INSTALL VERIFY FAILED (pilot E2E) — see gate output above"; exit 1; }
 fi
 
 echo "install: OK ($REPO)"

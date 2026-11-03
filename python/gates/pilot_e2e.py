@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""G-PILOT-E2E — fixture end-to-end for the three frozen pilots (A0 §7 gate 7).
+
+What this proves per pilot, on the LIVE binaries (not mocks):
+
+    feed -> rail -> cell (E1..E6) -> E7 -> signed D4 fills -> ledger_recon
+
+twice over the identical feed, with identical results both passes
+(deterministic spine). A second, sequential pass guards against the classic
+"works once because state leaked" failure.
+
+Data honesty (A0 §4/§7): this gate runs on **labelled synthetic fixture**
+feeds. It makes NO claim about venue data for any pilot, registers no D3
+dataset rows, and prints `"data_kind": "fixture-synthetic"` in every result.
+Real-data E2E for a pilot requires its registered dataset + verified D3 row
+and is a separate acceptance step. P1 identity remains BTC-USDC-PERP; no
+fixture here is ever relabelled as BTC-USD or Binance BTCUSDT.
+
+Usage: uv run --project python/train python3 python/gates/pilot_e2e.py [P1|P2|P3|ALL]
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HERE = Path(__file__).parent
+REPO = HERE.parent.parent
+sys.path.insert(0, str(HERE))
+
+import w0b_gates as w0b
+from _env import scratch_dir
+
+SCRATCH = scratch_dir()
+
+PILOTS = {
+    "P1": {
+        "symbol": "BTCUSDC",
+        "subject": "market.spot.BTCUSDC",
+        "identity": "Hyperliquid BTC-USDC-PERP (pilot 1, quote USDC)",
+    },
+    "P2": {
+        "symbol": "NIFTY",
+        "subject": "market.spot.NIFTY",
+        "identity": "NSE NIFTY F&O option chain (pilot 2, quote INR)",
+    },
+    "P3": {
+        "symbol": "GOLD",
+        "subject": "market.spot.GOLD",
+        "identity": "Gold (pilot 3 — venue/feed still pending, identity not frozen)",
+    },
+}
+
+TICKS = 220
+DECIDE_EVERY = 25
+
+
+def fixture_closes() -> list[float]:
+    """Deterministic four-block ramp: the skeleton rule must alternate
+    Buy/Sell on the rising/falling blocks, so the gate has a known-shape
+    signal rather than a random walk whose intent count could be zero."""
+    closes: list[float] = []
+    px = 100.0
+    for block in range(4):
+        step = 0.5 if block % 2 == 0 else -0.5
+        for _ in range(TICKS // 4):
+            px = round(px + step, 2)
+            closes.append(px)
+    if not all(c > 0 for c in closes):
+        raise RuntimeError("fixture produced a non-positive price")
+    return closes
+
+
+def psql(sql: str) -> str:
+    """Read path over the compose Postgres (same flags as w0b.psql_exec:
+    -A -t unaligned/tuples-only so counts come back as one bare line)."""
+    r = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            "gfti_app",
+            "-d",
+            "gfti",
+            "-A",
+            "-t",
+            "-c",
+            sql,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(w0b.COMPOSE),
+        check=False,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"psql failed: {r.stderr.strip()}")
+    return r.stdout
+
+
+def _reap() -> None:
+    # a leaked e7/cell/rail from a crashed run consumes this run's intents
+    for stray in ("e7", "cell", "rail"):
+        subprocess.run(
+            ["pkill", "-f", f"target/release/{stray}"],
+            capture_output=True,
+            check=False,
+        )
+
+
+def run_pilot(pid: str, closes: list[float]) -> dict:
+    p = PILOTS[pid]
+    symbol, subject = p["symbol"], p["subject"]
+    e, _secret = w0b.owner_env()
+    e = dict(
+        e,
+        RAIL_NATS_URL="nats://127.0.0.1:4222",
+        KILL_REFRESH_MS="200",
+        CELL_TICKS=str(len(closes)),
+        CELL_DECIDE_EVERY=str(DECIDE_EVERY),
+        CELL_SUBJECT=subject,
+    )
+
+    w0b.run(w0b.BIN / "ledger_init", str(w0b.COMPOSE / "sql" / "001_d3_d4_init.sql"), env=e)
+    _reap()
+    w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
+    w0b.run(w0b.BIN / "ledger_kill", "resolve", "L4", f"{pid}-fixture-open", env=e)
+
+    feed = SCRATCH / f"pilot_{pid}_feed.tsv"
+    base_ts = 1_760_000_000 * 1_000_000_000
+    with open(feed, "w") as fh:
+        fh.writelines(
+            f"{symbol} {base_ts + i * 86_400 * 1_000_000_000} {px} public\n"
+            for i, px in enumerate(closes)
+        )
+
+    children: list[subprocess.Popen] = []
+
+    def _spawn(cmd: list, **kw) -> subprocess.Popen:
+        child = subprocess.Popen(cmd, **kw)
+        children.append(child)
+        return child
+
+    def _cell_pass(log: Path) -> None:
+        with open(log, "w") as fh:
+            cell = _spawn(
+                [str(w0b.BIN / "cell")],
+                env=e,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                cwd=str(REPO),
+            )
+            time.sleep(1.2)
+            with open(feed) as feed_handle:
+                subprocess.run(
+                    [str(w0b.BIN / "rail")],
+                    stdin=feed_handle,
+                    capture_output=True,
+                    timeout=180,
+                    cwd=str(REPO),
+                    check=False,
+                )
+            cell.wait(timeout=90)
+
+    def _summary(log: Path) -> dict:
+        lines = [
+            x
+            for x in log.read_text().splitlines()
+            if x.startswith("LEDGER-CELL-SUMMARY")
+        ]
+        return json.loads(lines[-1].split(" ", 1)[1]) if lines else {}
+
+    try:
+        # pass 1 — calibrate the exact intent count (deterministic decisions)
+        _cell_pass(SCRATCH / f"pilot_{pid}_cell1.log")
+        s1 = _summary(SCRATCH / f"pilot_{pid}_cell1.log")
+        expected = int(s1.get("intents_published", 0) or 0)
+        if expected < 1:
+            raise RuntimeError(f"{pid}: fixture produced zero intents — gate cannot verify routing")
+
+        w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
+        e7_in = SCRATCH / f"pilot_{pid}_e7_in.txt"
+        e7_in.write_text("GO\n")
+        with (
+            open(e7_in) as e7_stdin,
+            open(SCRATCH / f"pilot_{pid}_e7.log", "w") as e7log,
+        ):
+            p_e7 = _spawn(
+                [str(w0b.BIN / "e7")],
+                env=dict(e, E7_EXPECT=str(expected), E7_SUBJECT="order.spot.>"),
+                stdin=e7_stdin,
+                stdout=subprocess.DEVNULL,
+                stderr=e7log,
+                cwd=str(REPO),
+            )
+            time.sleep(1.2)  # E7 subscribed before any new intent is published
+            _cell_pass(SCRATCH / f"pilot_{pid}_cell2.log")
+            p_e7.wait(timeout=120)
+        s2 = _summary(SCRATCH / f"pilot_{pid}_cell2.log")
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+        for child in children:
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+
+    e7_txt = (SCRATCH / f"pilot_{pid}_e7.log").read_text()
+    done = [x for x in e7_txt.splitlines() if x.startswith("LEDGER-E7-DONE")]
+    e7j = json.loads(done[-1].split(" ", 1)[1]) if done else {}
+
+    fills_raw = psql(
+        f"SELECT count(*) FROM d4.fills WHERE symbol = '{symbol}';"
+    ).strip()
+    fill_rows = [x.strip() for x in fills_raw.splitlines() if x.strip()]
+    fills = int(fill_rows[-1]) if fill_rows else 0
+
+    recon_out = w0b.run(w0b.BIN / "ledger_recon", env=e)
+    rline = [x for x in recon_out.splitlines() if x.startswith("LEDGER-RECON ")]
+    rj = json.loads(rline[-1].split(" ", 1)[1]) if rline else {}
+
+    checks = {
+        "decisions_gt_zero": int(s2.get("decisions", 0) or 0) > 0,
+        "e12_within_budget": (s2.get("e12_p99", 10**12) or 10**12) < 1_000_000,
+        "intents_gt_zero": expected > 0,
+        "fills_equal_intents": fills == expected,
+        "e7_saw_all": e7j.get("fills") == expected,
+        "bad_sigs_zero": rj.get("bad_sigs") == 0,
+        # determinism: identical feed, identical decision shape in both passes
+        "deterministic_passes": (
+            s1.get("decisions") == s2.get("decisions")
+            and s1.get("allows") == s2.get("allows")
+            and s1.get("intents_published") == s2.get("intents_published")
+        ),
+    }
+    return {
+        "pilot": pid,
+        "symbol": symbol,
+        "identity": p["identity"],
+        "data_kind": "fixture-synthetic",
+        "real_registered_data": False,
+        "ticks": len(closes),
+        "decisions": s2.get("decisions"),
+        "allows": s2.get("allows"),
+        "intents": expected,
+        "d4_fills": fills,
+        "e7_fills": e7j.get("fills"),
+        "bad_sigs": rj.get("bad_sigs"),
+        "e12_p99_ns": s2.get("e12_p99"),
+        "budget_ns": 1_000_000,
+        "checks": checks,
+        "ok": all(checks.values()),
+    }
+
+
+def main() -> None:
+    which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"
+    todo = list(PILOTS) if which == "ALL" else [which]
+    if not all(pid in PILOTS for pid in todo):
+        print(f"unknown pilot selector {which!r}; use P1|P2|P3|ALL")
+        raise SystemExit(2)
+
+    closes = fixture_closes()
+    results = []
+    for pid in todo:
+        try:
+            res = run_pilot(pid, closes)
+        except Exception as exc:  # noqa: BLE001 — a gate reports, never crashes silently  # gate must report, never crash silently
+            res = {"pilot": pid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        results.append(res)
+        print("PILOT-E2E " + json.dumps(res, sort_keys=True), flush=True)
+
+    ok = all(r.get("ok") for r in results)
+    print(
+        "PILOT-E2E-SUITE "
+        + json.dumps(
+            {
+                "requested": which,
+                "pilots": [r.get("pilot") for r in results],
+                "failed": [r.get("pilot") for r in results if not r.get("ok")],
+                "data_kind": "fixture-synthetic",
+                "ok": ok,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
+    raise SystemExit(0 if ok else 1)
+
+
+if __name__ == "__main__":
+    main()

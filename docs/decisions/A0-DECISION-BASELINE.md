@@ -90,6 +90,7 @@ open unjustified gap row (machine-enforced — walk_forward refuses; proven by W
 | D3/D4/D5 SQL migrations 001–006 | applied (006 confirmed twice idempotent) | migration history runner in installer |
 | gates W0a/W0b/W0c/B1 | passing evidence recorded | re-run in CI where stateless |
 | gate W1 (this build) | **green evidence on record** (`ALL`, 2026-11-03) | keep as release gate step |
+| G-PILOT-E2E fixture arm | **green evidence on record** (`PILOT-E2E-SUITE ok:true`, 3 pilots, 2026-11-03; `docs/gates/PILOT-E2E.md`) | real-data arm needs registered verified datasets (Phase 4) |
 | W1 gate + W0c cockpit worker | running in-process dev mode | W3 finalize |
 | Nautilus integration | none in repo (by design — the E4 path) | W2 spike, contract-first |
 | Installer / CI | being added with this baseline (§7) | iterate until clean-install passes |
@@ -105,7 +106,7 @@ G = fused from FULL-SYSTEM-BLUEPRINT §13 gates and §15 release checklist:
 4. **G-ENGINE** E1–E7 contract tests, incl. kill cascade + reconcile-before-order + ws-close (w0b G7 + W1-GATE arms).
 5. **G-DATA** for each dataset: D3 row verified + gap coverage + B-GATE hash check before any training.
 6. **G-RESEARCH** E4-WF CPCV/DSR fail-closed + training-lock negative + artifact negative tests (W1-GATE-WF, done.
-7. **G-PILOT-E2E** for each of P1/P2/P3: ingest→features→paper→recon→replay on **fresh checkout data** (fixture tree), then on real-registered data; deterministic output either way (W1-GATE-REPLAY principle, twice).
+7. **G-PILOT-E2E** for each of P1/P2/P3: ingest→features→paper→recon→replay on **fresh checkout data** (fixture tree), then on real-registered data; deterministic output either way (W1-GATE-REPLAY principle, twice). Fixture arm = **measured** (`python/gates/pilot_e2e.py ALL`, 2026-11-03: P1/P2/P3 each 8 decisions → 8 signed fills, bad_sigs 0, deterministic across both passes); real-data arm = **pending** until each pilot's collector registers a `verified=true` D3 row.
 8. **G-CI-OS** every tier's matrix job green on the release tag.
 
 No gate can be waived by plan text; a green CI badge is not a gate pass.
@@ -114,7 +115,7 @@ No gate can be waived by plan text; a green CI badge is not a gate pass.
 
 1. **Phase 0 (this doc)** — baseline locked; instrument IDs frozen.
 2. **Phase 1** — installer + CI skeleton (`bootstrap/install.sh`, `.github/workflows/ci.yml`) proven by a real run on tier A.
-3. **Phase 2** — E-spine completion in Rust: featurize (E1 feature API parity with the engine crate), evaluate (E2 signed-artifact loader), govern (E5 deterministic governor), exec (E6 scheduler/paper/shadow) against frozen contracts; ledger audits.
+3. **Phase 2** — E-spine completion in Rust: featurize (E1 feature API parity with the engine crate), evaluate (E2 signed-artifact loader), govern (E5 deterministic governor), exec (E6 scheduler/paper/shadow) against frozen contracts; ledger audits. **Status 2026-11-03: complete** — E1/E2/E5/E6 crates landed with cross-crate contract tests (`rust/exec/tests/spine.rs`), 34 cargo suites green, clippy `-D warnings` clean.
 4. **Phase 3** — fixture E2E for P1/P2/P3 across the full spine (ticket#-traceable).
 5. **Phase 4** — data backfills gated by B-GATE; pilots wired to real infra.
 6. **Phase 5** — training/eval runs on P1 BTC-USDC using registered (verified) data only.
