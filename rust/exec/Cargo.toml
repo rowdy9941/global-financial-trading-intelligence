@@ -1,0 +1,18 @@
+[package]
+name = "exec"
+version = "0.1.0"
+edition.workspace = true
+
+# E6 router (A0 baseline §3) — paper/shadow intent routing with IDEMPOTENT
+# client order IDs. Zero-dep (std-only): routing is pure decision logic here;
+# transport stays with the cell binary via rail, as in W0b/W1. Live mode is
+# deliberately ABSENT from this enum until W3's owner gates land — the type
+# system refuses what the owner has not approved (fail-closed vocabulary).
+# The canonical intent payload string (E7's consumed wire format) moves here
+# so there is one format owner; engine re-exports for compile compatibility.
+
+[dependencies]
+govern = { path = "../govern" }
+
+[lints.rust]
+warnings = "deny"

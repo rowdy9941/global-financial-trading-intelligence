@@ -35,13 +35,7 @@ pub fn evaluate(f: &Features) -> Action {
     }
 }
 
-/// E6 order intent payload (line `"<side> <qty:.8> <px:.8> <decision_id>"` —
-/// lowercase side; symbol rides the `order.spot.<SYM>` subject).
-pub fn intent_payload(side: &Action, qty: f64, px: f64, decision_id: u64) -> String {
-    let side = match side {
-        Action::Buy => "buy",
-        Action::Sell => "sell",
-        Action::None => "hold",
-    };
-    format!("{side} {qty:.8} {px:.8} {decision_id}")
-}
+// E6 order intent payload: the format now lives in the `exec` crate (the
+// router owns the wire contract); the engine re-exports it so the cell
+// binary keeps importing `engine::intent_payload` unchanged.
+pub use exec::intent_payload;

@@ -311,6 +311,7 @@ dependencies = [
 name = "engine"
 version = "0.1.0"
 dependencies = [
+ "exec",
  "featurize",
  "govern",
  "ledger",
@@ -326,6 +327,13 @@ dependencies = [
  "hmac",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "exec"
+version = "0.1.0"
+dependencies = [
+ "govern",
 ]
 
 [[package]]

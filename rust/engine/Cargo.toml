@@ -10,6 +10,7 @@ edition.workspace = true
 [dependencies]
 rail = { path = "../rail" }
 featurize = { path = "../featurize" }
+exec = { path = "../exec" }
 govern = { path = "../govern" }
 ledger = { path = "../ledger" }
 
