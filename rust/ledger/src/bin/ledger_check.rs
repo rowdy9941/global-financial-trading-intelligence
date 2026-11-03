@@ -16,8 +16,15 @@ fn main() {
             println!("LEDGER-CHECK {{\"state\":\"open\",\"risk_allowed\":true}}");
             std::process::exit(0);
         }
-        Kill::Engaged { level, reason, source } => {
-            println!("LEDGER-CHECK {{\"state\":\"engaged\",\"level\":\"{level}\",\"source\":\"{source}\",\"reason\":{:?},\"risk_allowed\":false}}", reason);
+        Kill::Engaged {
+            level,
+            reason,
+            source,
+        } => {
+            println!(
+                "LEDGER-CHECK {{\"state\":\"engaged\",\"level\":\"{level}\",\"source\":\"{source}\",\"reason\":{:?},\"risk_allowed\":false}}",
+                reason
+            );
             std::process::exit(7);
         }
         Kill::FailsafeEngaged => {

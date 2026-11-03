@@ -8,8 +8,8 @@
 //! * **Signed rows**: every fill carries an HMAC-SHA256 over its canonical
 //!   string under the role secret; verification is recomputation (§9 roles).
 
-use hmac::{Hmac, Mac};
 use hmac::digest::KeyInit;
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 type HmacSha256 = Hmac<Sha256>;
 
@@ -18,9 +18,8 @@ pub use postgres::Client;
 /// Connect to the D3/D4 Postgres. `LEDGER_URL` env overrides; dev default
 /// matches compose/.env.example placeholders (dev-local only).
 pub fn connect() -> std::result::Result<Client, postgres::Error> {
-    let url = std::env::var("LEDGER_URL").unwrap_or_else(|_| {
-        "postgres://gfti_app:gfti_dev_pass@127.0.0.1:5432/gfti".to_string()
-    });
+    let url = std::env::var("LEDGER_URL")
+        .unwrap_or_else(|_| "postgres://gfti_app:gfti_dev_pass@127.0.0.1:5432/gfti".to_string());
     Client::connect(&url, postgres::NoTls)
 }
 
@@ -50,8 +49,8 @@ pub fn role_secret(role: &str) -> Option<String> {
 
 /// HMAC-SHA256 hex under the role secret. Role secret never persisted.
 pub fn sign(canonical: &str, role_secret: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(role_secret.as_bytes())
-        .expect("hmac accepts any key length");
+    let mut mac =
+        HmacSha256::new_from_slice(role_secret.as_bytes()).expect("hmac accepts any key length");
     mac.update(canonical.as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -103,7 +102,9 @@ pub fn append_fill(
             "INSERT INTO d4.fills (source, symbol, side, qty, px, signer_role, sig)
              VALUES ($1, $2, $3, $4::text::numeric, $5::text::numeric, $6, $7)
              RETURNING fill_id",
-            &[&source, &symbol, &side, &qty_text, &px_text, &role_name, &sig],
+            &[
+                &source, &symbol, &side, &qty_text, &px_text, &role_name, &sig,
+            ],
         )
         .map_err(|e| e.to_string())?;
     let id: i64 = row.get(0);
@@ -117,7 +118,7 @@ pub fn append_fill(
 /// path; `append_fill` stays for single-row callers.
 pub fn append_fills_batch(
     c: &mut Client,
-    rows: &[(&str, &str, &str, f64, f64,)], // (source, symbol, side, qty, px) — one owner role
+    rows: &[(&str, &str, &str, f64, f64)], // (source, symbol, side, qty, px) — one owner role
     role_name: &str,
 ) -> Result<Vec<String>, String> {
     let secret = role_secret(role_name)
@@ -130,7 +131,10 @@ pub fn append_fills_batch(
         if !(qty > 0.0 && px > 0.0 && qty.is_finite() && px.is_finite()) {
             return Err("qty/px must be positive finite".to_string());
         }
-        sigs.push(sign(&fill_canonical(source, symbol, side, qty, px), &secret));
+        sigs.push(sign(
+            &fill_canonical(source, symbol, side, qty, px),
+            &secret,
+        ));
     }
     let mut txn = c.transaction().map_err(errstr)?; // one commit = one WAL flush
     let stmt = txn
@@ -178,7 +182,9 @@ pub fn verify_fills(c: &mut Client) -> Result<(bool, i64, i64), String> {
             )
             .map_err(errstr)?;
         let role: String = rows[0].get(0);
-        let Some(secret) = role_secret(&role) else { continue };
+        let Some(secret) = role_secret(&role) else {
+            continue;
+        };
         let fr = c
             .query(
                 "SELECT fill_id, source, symbol, side, qty::float8, px::float8, sig
@@ -247,7 +253,11 @@ pub fn record_recon(
 pub enum Kill {
     /// No explicit state yet → engines treat as ENGAGED (fail-closed default).
     FailsafeEngaged,
-    Engaged { level: String, reason: String, source: String },
+    Engaged {
+        level: String,
+        reason: String,
+        source: String,
+    },
     Open,
 }
 
@@ -385,7 +395,10 @@ pub fn decide_approval(
     }
     // already decided? (append-only; latest grants, but any row means closed)
     let decided = c
-        .query("SELECT 1 FROM d4.approvals WHERE ticket = $1 LIMIT 1", &[&ticket])
+        .query(
+            "SELECT 1 FROM d4.approvals WHERE ticket = $1 LIMIT 1",
+            &[&ticket],
+        )
         .map_err(errstr)?;
     if !decided.is_empty() {
         return Err(format!("ticket {ticket} already decided"));
@@ -416,10 +429,7 @@ pub fn decide_approval(
 }
 
 /// Derived state: (pending, Some(decision)) — pending means no decision row.
-pub fn approval_state(
-    c: &mut Client,
-    ticket: &str,
-) -> Result<(bool, Option<String>), String> {
+pub fn approval_state(c: &mut Client, ticket: &str) -> Result<(bool, Option<String>), String> {
     let rows = c
         .query(
             "SELECT t.ticket IS NOT NULL,

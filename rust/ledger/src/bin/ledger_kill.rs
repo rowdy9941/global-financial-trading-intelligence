@@ -12,13 +12,19 @@ fn main() {
     let _ = url_ok;
     let mut c = match connect() {
         Ok(c) => c,
-        Err(e) => { eprintln!("ledger_kill: connect failed: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("ledger_kill: connect failed: {e}");
+            std::process::exit(2);
+        }
     };
     let res = match action.as_str() {
         "engage" => kill_flip(&mut c, true, &level, "gate-drill", &reason),
         "resolve" => kill_flip(&mut c, false, "L4", "gate-drill", &reason),
         _ => Err("usage: ledger_kill <engage|resolve> [level] [reason]".into()),
     };
-    if let Err(e) = res { eprintln!("ledger_kill: {e}"); std::process::exit(2); }
+    if let Err(e) = res {
+        eprintln!("ledger_kill: {e}");
+        std::process::exit(2);
+    }
     println!("LEDGER-KILL {action} level={level}");
 }

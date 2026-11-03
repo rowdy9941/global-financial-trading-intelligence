@@ -8,7 +8,11 @@ use std::process::exit;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (subject, want, url) = match args.len() {
-        4 => (args[1].clone(), args[2].parse::<u32>().expect("n msgs"), args[3].clone()),
+        4 => (
+            args[1].clone(),
+            args[2].parse::<u32>().expect("n msgs"),
+            args[3].clone(),
+        ),
         _ => {
             eprintln!("usage: rail-sub <subject> <n-msgs> <nats-url>");
             exit(2);
@@ -16,7 +20,10 @@ fn main() {
     };
     let mut nats = match Nats::connect(&url, "rail-sub") {
         Ok(n) => n,
-        Err(e) => { eprintln!("sub: cannot connect {url}: {e}"); exit(2); }
+        Err(e) => {
+            eprintln!("sub: cannot connect {url}: {e}");
+            exit(2);
+        }
     };
     if let Err(e) = nats.subscribe(&subject) {
         eprintln!("sub: cannot subscribe: {e}");
@@ -34,7 +41,11 @@ fn main() {
         got += 1;
         let line = String::from_utf8_lossy(&payload);
         // payload = "ts arrival price" — transit = now − arrival
-        if let Some(arr) = line.split_whitespace().nth(1).and_then(|s| s.parse::<u64>().ok()) {
+        if let Some(arr) = line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<u64>().ok())
+        {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos() as u64)
@@ -47,6 +58,8 @@ fn main() {
     let avg = transits.iter().sum::<u64>() / n.max(1) as u64;
     let p50 = transits[(n as f64 * 0.50) as usize % n.max(1)];
     let p99 = transits[(n as f64 * 0.99) as usize % n.max(1)];
-    eprintln!("WIRE-E2E {{\"received\":{got},\"n\":{n},\"transit_ns_avg\":{avg},\"p50\":{p50},\"p99\":{p99}}}");
+    eprintln!(
+        "WIRE-E2E {{\"received\":{got},\"n\":{n},\"transit_ns_avg\":{avg},\"p50\":{p50},\"p99\":{p99}}}"
+    );
     println!("received={got}");
 }

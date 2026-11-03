@@ -127,7 +127,12 @@ mod tests {
     use super::*;
 
     fn row<'a>(price: f64, ts: u64, rights: &'a str) -> RawRow<'a> {
-        RawRow { symbol: "NIFTY", ts_nanos: ts, price, rights }
+        RawRow {
+            symbol: "NIFTY",
+            ts_nanos: ts,
+            price,
+            rights,
+        }
     }
     const T0: u64 = 1_772_000_000_000_000_000; // ≈ 2026-02-20
 
@@ -168,9 +173,19 @@ mod tests {
 
     #[test]
     fn symbol_contract_enforced() {
-        let bad = RawRow { symbol: "NIFTY;", ts_nanos: T0, price: 25_310.5, rights: "public" };
+        let bad = RawRow {
+            symbol: "NIFTY;",
+            ts_nanos: T0,
+            price: 25_310.5,
+            rights: "public",
+        };
         assert_eq!(stamp_row(&bad, T0), Err(Reject::Symbol));
-        let empty = RawRow { symbol: "", ts_nanos: T0, price: 25_310.5, rights: "public" };
+        let empty = RawRow {
+            symbol: "",
+            ts_nanos: T0,
+            price: 25_310.5,
+            rights: "public",
+        };
         assert_eq!(stamp_row(&empty, T0), Err(Reject::Symbol));
     }
 }

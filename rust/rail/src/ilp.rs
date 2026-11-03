@@ -34,7 +34,13 @@ fn esc_cell(b: &str) -> String {
 /// numeric fields MUST carry suffixes — `i` long, `d` double; a bare-trailing
 /// integer is the designated timestamp (epoch micros). Symbol column is deduped
 /// server-side; arrival kept as value column (nanos).
-pub fn ilp_line(table: &str, symbol: &str, ts_nanos: u64, arrival_nanos: u64, price: f64) -> String {
+pub fn ilp_line(
+    table: &str,
+    symbol: &str,
+    ts_nanos: u64,
+    arrival_nanos: u64,
+    price: f64,
+) -> String {
     let micros = ts_nanos / 1_000;
     format!(
         "{table},symbol={} ts_nanos={}i,arrival_nanos={}i,price={}d {}",
@@ -56,11 +62,21 @@ pub struct IlpBuf {
 
 impl IlpBuf {
     pub fn new(table: &str) -> Self {
-        Self { table: table.to_string(), buf: String::with_capacity(64 * 1024), rows: 0 }
+        Self {
+            table: table.to_string(),
+            buf: String::with_capacity(64 * 1024),
+            rows: 0,
+        }
     }
 
     pub fn push(&mut self, symbol: &str, ts_nanos: u64, arrival_nanos: u64, price: f64) {
-        self.buf.push_str(&ilp_line(&self.table, symbol, ts_nanos, arrival_nanos, price));
+        self.buf.push_str(&ilp_line(
+            &self.table,
+            symbol,
+            ts_nanos,
+            arrival_nanos,
+            price,
+        ));
         self.buf.push('\n');
         self.rows += 1;
     }
@@ -110,8 +126,18 @@ mod tests {
         });
 
         let mut buf = IlpBuf::new("market_spot");
-        buf.push("NIFTY", 1_772_000_000_000_001_895, 1_772_000_000_000_001_900, 101.25);
-        buf.push("US D'Q", 1_772_000_000_000_001_890, 1_772_000_000_000_001_891, -0.5); // escaping + unordered ts
+        buf.push(
+            "NIFTY",
+            1_772_000_000_000_001_895,
+            1_772_000_000_000_001_900,
+            101.25,
+        );
+        buf.push(
+            "US D'Q",
+            1_772_000_000_000_001_890,
+            1_772_000_000_000_001_891,
+            -0.5,
+        ); // escaping + unordered ts
         assert_eq!(buf.len(), 2);
         let mut sink = TcpStream::connect(addr).expect("connect");
         let n = buf.flush_to(&mut sink).expect("flush");
@@ -145,12 +171,20 @@ mod tests {
         // busy dev box must not fail a perf-sanity test (W0b lesson).
         let t_all = std::time::Instant::now();
         for i in 0..1000u64 {
-            let line = ilp_line("market_spot", "BTC_USDT", 1_772_000_000_000_000_000 + i, i, 420.17);
+            let line = ilp_line(
+                "market_spot",
+                "BTC_USDT",
+                1_772_000_000_000_000_000 + i,
+                i,
+                420.17,
+            );
             assert!(!line.is_empty());
         }
         let dt = t_all.elapsed();
         // 1000 rows in < 50 ms ⇒ ~50 µs/row amortized — far from quadratic.
-        assert!(dt.as_millis() < 50, "encode anomalous: 1000 rows in {dt:?} (dev profile)");
+        assert!(
+            dt.as_millis() < 50,
+            "encode anomalous: 1000 rows in {dt:?} (dev profile)"
+        );
     }
 }
-

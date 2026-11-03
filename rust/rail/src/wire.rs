@@ -99,7 +99,11 @@ impl Nats {
     /// Returns `(subject, payload)`. Responds to server PINGs with PONG.
     /// Deliveries that arrived while an ack path waited go FIRST (FIFO),
     /// preserving server-side delivery order.
-    pub fn next_message(&mut self, subject_buf: &mut String, payload: &mut Vec<u8>) -> std::io::Result<()> {
+    pub fn next_message(
+        &mut self,
+        subject_buf: &mut String,
+        payload: &mut Vec<u8>,
+    ) -> std::io::Result<()> {
         loop {
             if let Some((s, p)) = self.pending.pop_front() {
                 subject_buf.clear();
@@ -128,7 +132,9 @@ impl Nats {
         let f: Vec<&str> = msgpart.split_whitespace().collect();
         // MSG <subject> <sid> <size>  [reply] \r\n
         let size: usize = f
-            .iter().next_back().copied()
+            .iter()
+            .next_back()
+            .copied()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| io_err("bad MSG line"))?;
         payload.resize(size + 2, 0);
@@ -200,12 +206,17 @@ mod tests {
             // the publish: parse "PUB <subj> <n>CRLF", read n-byte payload + CRLF,
             // then the PING line.
             b.read_line(&mut line).expect("pub head");
-            let n: usize = line.split_whitespace().last().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+            let n: usize = line
+                .split_whitespace()
+                .last()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(0);
             assert_eq!(n, 9, "client published 9 bytes");
             let mut body = vec![0u8; n + 2];
             b.read_exact(&mut body).expect("pub body");
             b.read_line(&mut line).expect("pub ping");
-            s.write_all(b"MSG market.spot.X g1 12\r\n").expect("deliver head");
+            s.write_all(b"MSG market.spot.X g1 12\r\n")
+                .expect("deliver head");
             s.write_all(payload).expect("deliver body");
             s.write_all(b"\r\n").expect("deliver crlf"); // MSG body terminator!
             s.write_all(b"PONG\r\n").expect("ack publish");

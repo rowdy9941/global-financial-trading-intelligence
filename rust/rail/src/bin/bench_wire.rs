@@ -9,11 +9,16 @@ use std::time::Instant;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let n = args.get(1).and_then(|a| a.parse::<u32>().ok()).unwrap_or_default();
+    let n = args
+        .get(1)
+        .and_then(|a| a.parse::<u32>().ok())
+        .unwrap_or_default();
     let (mode, url, bs) = (
         args.get(2).cloned().unwrap_or_default(),
         args.get(3).cloned().unwrap_or_default(),
-        args.get(4).and_then(|v| v.parse::<u32>().ok()).unwrap_or(64),
+        args.get(4)
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(64),
     );
     if n == 0 || url.is_empty() || !(mode == "per" || mode == "batch") {
         eprintln!("usage: bench_wire <rows> <per|batch> <nats-url> [batch-size]");

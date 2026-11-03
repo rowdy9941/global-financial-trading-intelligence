@@ -9,11 +9,17 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (n, source) = match (args.get(1).and_then(|a| a.parse::<u32>().ok()), args.get(2)) {
         (Some(n), Some(s)) => (n, s.clone()),
-        _ => { eprintln!("usage: ledger_fill <n> <source>"); std::process::exit(2); }
+        _ => {
+            eprintln!("usage: ledger_fill <n> <source>");
+            std::process::exit(2);
+        }
     };
     let mut c = match connect() {
         Ok(c) => c,
-        Err(e) => { eprintln!("ledger_fill: connect failed: {e}"); std::process::exit(2); }
+        Err(e) => {
+            eprintln!("ledger_fill: connect failed: {e}");
+            std::process::exit(2);
+        }
     };
     let chunk = 1000usize;
     let t_all = Instant::now();
@@ -42,7 +48,10 @@ fn main() {
                 batch_ns.push(dt);
                 per_row_ns.push(dt / m as u64);
             }
-            Err(e) => { eprintln!("ledger_fill: {e}"); std::process::exit(2); }
+            Err(e) => {
+                eprintln!("ledger_fill: {e}");
+                std::process::exit(2);
+            }
         }
         done += m as u32;
     }

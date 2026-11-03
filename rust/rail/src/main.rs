@@ -5,7 +5,7 @@
 //! Publishes stamped rows to `market.spot.<SYMBOL>` — fail-closed: if NATS is
 //! unreachable the rail exits non-zero rather than running silently detached.
 
-use rail::{stamp_row, wire::Nats, RawRow};
+use rail::{RawRow, stamp_row, wire::Nats};
 use std::io::{self, BufRead, Write};
 
 const DEFAULT_NATS: &str = "nats://127.0.0.1:4222";
@@ -48,11 +48,14 @@ fn main() {
                 continue;
             }
         };
-        let raw = RawRow { symbol: f[0], ts_nanos: ts, price, rights: f[3] };
+        let raw = RawRow {
+            symbol: f[0],
+            ts_nanos: ts,
+            price,
+            rights: f[3],
+        };
         // arrival clock is now, at the rail's boundary
-        let arrival = match std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-        {
+        let arrival = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
             Ok(d) => d.as_nanos() as u64,
             Err(_) => {
                 eprintln!("clock failure — refusing row (fail-closed)");

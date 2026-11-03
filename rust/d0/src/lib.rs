@@ -66,9 +66,14 @@ pub fn parse_row(line: &str) -> Option<Stamped> {
 /// Write rows as one Parquet file (single row group, SNAPPY), deterministically
 /// ordered by (ts_nanos, symbol). Returns bytes written.
 pub fn write_parquet(path: &str, mut rows: Vec<Stamped>) -> Result<(usize, u64), String> {
-    rows.sort_unstable_by(|a, b| a.ts_nanos.cmp(&b.ts_nanos).then_with(|| a.symbol.cmp(&b.symbol)));
+    rows.sort_unstable_by(|a, b| {
+        a.ts_nanos
+            .cmp(&b.ts_nanos)
+            .then_with(|| a.symbol.cmp(&b.symbol))
+    });
     let n = rows.len();
-    let symbols: StringArray = StringArray::from_iter_values(rows.iter().map(|r| r.symbol.as_str()));
+    let symbols: StringArray =
+        StringArray::from_iter_values(rows.iter().map(|r| r.symbol.as_str()));
     let ts: UInt64Array = rows.iter().map(|r| r.ts_nanos).collect();
     let arr: UInt64Array = rows.iter().map(|r| r.arrival_nanos).collect();
     let price: Float64Array = rows.iter().map(|r| r.price).collect();
@@ -92,7 +97,8 @@ pub fn write_parquet(path: &str, mut rows: Vec<Stamped>) -> Result<(usize, u64),
         .truncate(true)
         .open(path)
         .map_err(|e| format!("open {path}: {e}"))?;
-    let mut writer = ArrowWriter::try_new(file, schema(), Some(props)).map_err(|e| e.to_string())?;
+    let mut writer =
+        ArrowWriter::try_new(file, schema(), Some(props)).map_err(|e| e.to_string())?;
     writer.write(&batch).map_err(|e| e.to_string())?;
     writer.close().map_err(|e| e.to_string())?;
     let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or_default();
@@ -184,7 +190,10 @@ mod tests {
     #[test]
     fn parses_ok_line_and_bare_payload() {
         let a = parse_row("OK NIFTY ts=5 arr=6 price=1.5").expect("ok-line");
-        assert_eq!((a.symbol.as_str(), a.ts_nanos, a.arrival_nanos, a.price), ("NIFTY", 5, 6, 1.5));
+        assert_eq!(
+            (a.symbol.as_str(), a.ts_nanos, a.arrival_nanos, a.price),
+            ("NIFTY", 5, 6, 1.5)
+        );
         let b = parse_row("USDJPY 7 8 9.25").expect("bare");
         assert_eq!((b.ts_nanos, b.arrival_nanos, b.price), (7, 8, 9.25));
         assert!(parse_row("garbage 1 2").is_none());
@@ -195,16 +204,29 @@ mod tests {
         let path = std::env::temp_dir().join(format!("d0-test-{}.parquet", std::process::id()));
         let p = path.to_str().expect("tmp path");
         let rows = vec![
-            Stamped { symbol: "A".into(), ts_nanos: 2, arrival_nanos: 9, price: 1.0 },
-            Stamped { symbol: "B".into(), ts_nanos: 1, arrival_nanos: 8, price: 2.0 },
+            Stamped {
+                symbol: "A".into(),
+                ts_nanos: 2,
+                arrival_nanos: 9,
+                price: 1.0,
+            },
+            Stamped {
+                symbol: "B".into(),
+                ts_nanos: 1,
+                arrival_nanos: 8,
+                price: 2.0,
+            },
         ];
         let (n, _bytes) = write_parquet(p, rows).expect("write");
         assert_eq!(n, 2);
-        assert_eq!(read_count(p).expect("read"), 2, "sorted write keeps all rows");
+        assert_eq!(
+            read_count(p).expect("read"),
+            2,
+            "sorted write keeps all rows"
+        );
         let _ = std::fs::remove_file(p);
     }
 }
 
 // main() lives in src/bin/d0_dump.rs — this crate is a library (reusable by
 // later training/backtest waves that read the cold tier).
-

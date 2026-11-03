@@ -57,13 +57,21 @@ fn main() {
             }
             Ok(mut c) => match kill_state(&mut c) {
                 Kill::Open => {
-                    println!("LEDGER-WATCHDOG {{\"tunix_ms\":{t},\"state\":\"open\",\"risk_allowed\":true}}");
+                    println!(
+                        "LEDGER-WATCHDOG {{\"tunix_ms\":{t},\"state\":\"open\",\"risk_allowed\":true}}"
+                    );
                 }
                 Kill::FailsafeEngaged => {
                     bad_ticks += 1;
-                    println!("LEDGER-WATCHDOG {{\"tunix_ms\":{t},\"state\":\"failsafe\",\"risk_allowed\":false}}");
+                    println!(
+                        "LEDGER-WATCHDOG {{\"tunix_ms\":{t},\"state\":\"failsafe\",\"risk_allowed\":false}}"
+                    );
                 }
-                Kill::Engaged { level, reason, source } => {
+                Kill::Engaged {
+                    level,
+                    reason,
+                    source,
+                } => {
                     bad_ticks += 1;
                     println!(
                         "LEDGER-WATCHDOG {{\"tunix_ms\":{t},\"state\":\"engaged\",\"level\":{level:?},\"source\":{source:?},\"reason\":{reason:?},\"risk_allowed\":false}}"
@@ -81,7 +89,9 @@ fn main() {
             break;
         }
     }
-    println!("LEDGER-WATCHDOG-DONE {{\"ticks\":{ticks},\"bad_ticks\":{bad_ticks},\"strict\":{strict}}}");
+    println!(
+        "LEDGER-WATCHDOG-DONE {{\"ticks\":{ticks},\"bad_ticks\":{bad_ticks},\"strict\":{strict}}}"
+    );
     if strict && bad_ticks > 0 {
         std::process::exit(7);
     }

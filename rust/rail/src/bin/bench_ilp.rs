@@ -3,7 +3,7 @@
 //! asserted sanely in unit tests (dev profile), verified for bytes in the TCP
 //! e2e unit test against an in-process fake server.
 
-use rail::ilp::{ilp_line, IlpBuf};
+use rail::ilp::{IlpBuf, ilp_line};
 use std::time::Instant;
 
 fn main() {

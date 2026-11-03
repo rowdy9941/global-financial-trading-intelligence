@@ -3,8 +3,8 @@
 //! (ts + 1) instead of wall clock, so replay is a pure function of input.
 //! Gate: two runs' outputs must be byte-identical (`cmp`).
 
-use rail::stamp_row;
 use rail::RawRow;
+use rail::stamp_row;
 use std::io::{BufRead, Write};
 
 fn main() {
@@ -21,12 +21,27 @@ fn main() {
             writeln!(out, "ERR fields").unwrap();
             continue;
         }
-        let Ok(ts) = f[1].parse::<u64>() else { writeln!(out, "ERR parse").unwrap(); continue };
-        let Ok(price) = f[2].parse::<f64>() else { writeln!(out, "ERR parse").unwrap(); continue };
-        let raw = RawRow { symbol: f[0], ts_nanos: ts, price, rights: f[3] };
+        let Ok(ts) = f[1].parse::<u64>() else {
+            writeln!(out, "ERR parse").unwrap();
+            continue;
+        };
+        let Ok(price) = f[2].parse::<f64>() else {
+            writeln!(out, "ERR parse").unwrap();
+            continue;
+        };
+        let raw = RawRow {
+            symbol: f[0],
+            ts_nanos: ts,
+            price,
+            rights: f[3],
+        };
         match stamp_row(&raw, ts + 1) {
-            Ok(r) => writeln!(out, "OK {} ts={} arr={} price={} rights={:?}",
-                r.symbol, r.ts_nanos, r.arrival_nanos, r.price, r.rights).unwrap(),
+            Ok(r) => writeln!(
+                out,
+                "OK {} ts={} arr={} price={} rights={:?}",
+                r.symbol, r.ts_nanos, r.arrival_nanos, r.price, r.rights
+            )
+            .unwrap(),
             Err(e) => writeln!(out, "ERR reject(reason={e:?})").unwrap(),
         }
     }

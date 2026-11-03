@@ -15,7 +15,10 @@ fn main() {
     }
     let n: u64 = args[1].parse().unwrap_or(0);
     let table = args[2].clone();
-    let addr = args.get(3).cloned().unwrap_or_else(|| "127.0.0.1:9009".to_string());
+    let addr = args
+        .get(3)
+        .cloned()
+        .unwrap_or_else(|| "127.0.0.1:9009".to_string());
     if n == 0 {
         eprintln!("{usage}");
         std::process::exit(2);

@@ -69,17 +69,22 @@ fn main() {
             if let Err(e) = request_ticket(&mut c, &ticket, &level, &req_role, &reason) {
                 bail(e);
             }
-            println!("LEDGER-APPR-REQUEST {{\"ticket\":\"{ticket}\",\"level\":\"{level}\",\"requester\":\"{req_role}\",\"state\":\"pending\"}}");
+            println!(
+                "LEDGER-APPR-REQUEST {{\"ticket\":\"{ticket}\",\"level\":\"{level}\",\"requester\":\"{req_role}\",\"state\":\"pending\"}}"
+            );
         }
         "decide" => {
             let f = |i: usize| a.get(i).cloned().unwrap_or_default();
             let (ticket, decision, level, dec_role, reason) = (f(1), f(2), f(3), f(4), f(5));
-            let appr_id = match decide_approval(&mut c, &ticket, &decision, &level, &dec_role, &reason) {
-                Ok(id) => id,
-                Err(e) => bail(e),
-            };
+            let appr_id =
+                match decide_approval(&mut c, &ticket, &decision, &level, &dec_role, &reason) {
+                    Ok(id) => id,
+                    Err(e) => bail(e),
+                };
             let n = l3_week_grants(&mut c).unwrap_or(-1);
-            println!("LEDGER-APPR-DECISION {{\"ticket\":\"{ticket}\",\"level\":\"{level}\",\"decision\":\"{decision}\",\"decider\":\"{dec_role}\",\"appr_id\":{appr_id},\"l3_week_grants\":{n}}}");
+            println!(
+                "LEDGER-APPR-DECISION {{\"ticket\":\"{ticket}\",\"level\":\"{level}\",\"decision\":\"{decision}\",\"decider\":\"{dec_role}\",\"appr_id\":{appr_id},\"l3_week_grants\":{n}}}"
+            );
         }
         "state" => {
             let ticket = a.get(1).cloned().unwrap_or_default();
