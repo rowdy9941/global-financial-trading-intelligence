@@ -125,5 +125,7 @@ No gate can be waived by plan text; a green CI badge is not a gate pass.
 
 | Date | Decision | Evidence |
 |---|---|---|
+| 2026-11-03 | P1 accumulation wired to the training lane: `resample_1m_to_1d.py` derives only COMPLETE days (partial edges dropped, interior holes refused) and `hl_capture.sh` registers the derived `hyperliquid/BTC-USDC/1d`; derived-vs-API daily bars agree exactly on every overlapping day | `docs/gates/P1-DATA.md` |
+| 2026-11-03 | P2 blocker recorded: NSE live chain endpoint returns 404 from this box while archives/holiday master are reachable; EOD bhavcopy works (5,060 NIFTY contract rows, integrity PASS) but cannot stand in for the chain identity — needs owner broker credentials (Upstox candidate) | `docs/gates/P2-DATA.md` |
 | 2026-11-03 | P1 intraday dataset registered: `hyperliquid/BTC-USDC/1m` (4,320 real bars, 0 missing, verified via the B-GATE gap rule); measured API retention (1m ≈ 3 days) recorded — historical intraday backfill impossible, PIT accumulation now runs via `scripts/hl_capture.sh` | `docs/gates/P1-DATA.md` |
 | 2026-11-03 | Baseline created; Nautilus conflicts reconciled (§3); pilots frozen (§4); OS tiers declared (§2); catalog truth pinned (§5); repo truth map (§6); gates formalized (§7) | this doc |

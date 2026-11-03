@@ -58,4 +58,21 @@ uv run register_b1.py \
     --schema-version 1 \
     --pre-inception-note "public candleSnapshot serves only the most recent ~3 days at 1m (measured 2026-11-03: 3d served, 4d empty), so nothing earlier is retrievable and no deeper intraday history is claimed by any row"
 
-echo "hl_capture: OK window=${START_MS}..${END_MS} artifact=${OUT_REL}"
+# Derive the DAILY projection of the accumulated capture. The training lane is
+# day-bar based and refuses intraday keys, so this is how P1 intraday
+# accumulation reaches it — with complete days only (partial edge days are
+# dropped by the resampler, never manufactured into a day bar).
+DAILY_REL="d0/hyperliquid/BTC-USDC/1d.parquet"
+DAILY_SUMMARY="${TMPDIR:-/tmp}/gfti_hl_btc_usdc_1d.json"
+uv run resample_1m_to_1d.py \
+    --d0-path "$REPO/$OUT_REL" --dataset-key "hyperliquid/${SYMBOL}/${INTERVAL}" \
+    --symbol "$SYMBOL" \
+    --out "$REPO/$DAILY_REL" --summary "$DAILY_SUMMARY" >/dev/null
+
+uv run register_b1.py \
+    --summary "$DAILY_SUMMARY" --d0-path "$DAILY_REL" \
+    --data-class hyperliquid \
+    --pre-inception-note "derived 1d projection of the PIT 1m capture hyperliquid/BTC-USDC/1m — history begins when that capture began (public API retains only ~3 days of 1m), so nothing earlier exists in this lineage" \
+    >/dev/null
+
+echo "hl_capture: OK window=${START_MS}..${END_MS} artifact=${OUT_REL} daily=${DAILY_REL}"

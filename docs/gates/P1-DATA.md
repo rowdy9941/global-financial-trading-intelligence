@@ -46,22 +46,66 @@ registrar defaults to for daily spot captures. `register_b1.py` gained
 `--pre-inception-note` for exactly this; a misleading justification is worse than
 no row.
 
-## 3 · Known limitations (explicit)
+## 3 · Derived daily projection (how accumulation reaches the training lane)
+
+The WF lane is day-bar based and **refuses intraday datasets**
+(`walk_forward.require_daily_lane`, added after this dataset produced all-zero
+Sharpes with `dsr=NaN` — the bug was the lane, not the data). So the 1m capture is
+projected to 1d by `python/collect/resample_1m_to_1d.py`, which never manufactures a
+day bar:
+
+- a day is kept only if **complete** — first slot is the UTC midnight open, every
+  expected slot present, no interior hole;
+- a partial **edge** day (capture window cuts it) is **dropped**: its last 1m close
+  is not the day's close;
+- a partial **interior** day is a real hole and is **refused** unless
+  `--allow-partial`, in which case it is dropped and listed in the summary.
+
+Run (also done automatically at the end of `scripts/hl_capture.sh`):
+
+```
+uv run resample_1m_to_1d.py --d0-path ../../d0/hyperliquid/BTC-USDC/1m.parquet \
+    --dataset-key hyperliquid/BTC-USDC/1m \
+    --out ../../d0/hyperliquid/BTC-USDC/1d.parquet --summary /tmp/hl_1d.json
+```
+
+Result on the 4,320-bar capture: **2 complete days kept** (2026-11-01, 11-02),
+**2 edge days dropped** (10-31 with 1,035/1,440 bars, 11-03 with 405/1,440).
+Registered as `hyperliquid/BTC-USDC/1d` with the lineage in `source`:
+`derived:resample-1m-to-1d:hyperliquid/BTC-USDC/1m:sha-<digest>`.
+
+### Cross-check against the venue's own daily bar
+
+The derived 1d series and an independently captured `hyperliquid/BTC-USD/1d`
+(the API's own daily bars) were compared on every overlapping day:
+
+```
+2026-11-01  open/high/low/close/volume/n_trades identical  (close 78326.0)
+2026-11-02  open/high/low/close/volume/n_trades identical  (close 76805.0)
+days_compared 2  all_identical True
+```
+
+Two independent paths agree to the last decimal, which is the strongest integrity
+signal available without venue files.
+
+## 4 · Known limitations (explicit)
 
 1. **D3 gap calendar is day-granular.** A missing 1-minute bar inside a captured
    day is *not* representable as a gap row; only whole-day holes are. Current
    capture has zero missing slots, so nothing is concealed — but future intraday
    holes must be caught by the collector's own `missing_bar_slots` check, not the
    registry.
-2. **3 days is not enough for training.** Training on P1 intraday requires the
-   capture loop to accumulate weeks; the DSR/WF gate remains the promotion
-   authority (currently 0.4894 on the daily row, below 0.95).
+2. **Not enough bars to train yet.** The derived 1d projection currently has
+   **2 bars**; the lane refuses with `data too short for even one fold: 2 bars
+   at folds=6 needs at least 300 bars`, so no artifact can be produced until
+   accumulation reaches ~300 days. The DSR/WF gate stays the promotion
+   authority (0.4894 on the legacy daily row, below the 0.95 gate).
 3. **No historical trades.** True tick (per-trade) data from HL is only
    available as a live WebSocket capture from now on; it cannot be reconstructed.
 
-## 4 · Next steps
+## 5 · Next steps
 
-- schedule `scripts/hl_capture.sh` (cron/systemd timer) so the intraday series
-  grows;
+- let `scripts/hl_capture.sh` keep running (cron, every 15 min) so the 1m series
+  and its derived 1d projection grow toward the 300-bar WF minimum;
 - add a WS `trades` recorder for genuine tick data going forward;
 - only then extend the WF/eval gate to 1m bars on accumulated real data.
