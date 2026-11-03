@@ -189,7 +189,14 @@ def walk_forward(closes: list[float], folds: int) -> dict:
         fold_rows.append(st)
         start += test_len
     if not fold_rows:
-        raise RuntimeError("data too short for even one fold")
+        # e.g. a freshly derived daily projection with a handful of bars while
+        # the capture accumulates. Refuse loudly: an artifact with no
+        # out-of-sample block would be evidence of nothing.
+        raise SystemExit(
+            f"data too short for even one fold: {n} bars at folds={folds} needs "
+            f"at least {5 * max(60, n // (folds + 2))} bars; refusing to emit an "
+            "artifact with no out-of-sample evidence"
+        )
     return {"folds": fold_rows, "fold_count": len(fold_rows),
             "test_len": test_len, "train_len": train_len,
             "trial_sharpes": trial_sharpes_all}

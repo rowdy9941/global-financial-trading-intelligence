@@ -444,3 +444,15 @@ def test_load_close_orders_intraday_rows_by_open_ms_not_by_date(tmp_path):
         ) TO '{path}' (FORMAT PARQUET)
     """)
     assert load_close(path) == [100.0, 101.0, 102.0]
+
+
+def test_walk_forward_produces_no_folds_on_a_tiny_series():
+    """A derived daily projection starts life with 2-3 bars; the lane must
+    detect 'no fold possible' so main() can refuse instead of crashing on an
+    empty fold list."""
+    from .walk_forward import walk_forward
+
+    closes = [100.0, 101.0, 102.0]
+    with pytest.raises(SystemExit) as exc:
+        walk_forward(closes, 6)
+    assert "too short for even one fold" in str(exc.value)
