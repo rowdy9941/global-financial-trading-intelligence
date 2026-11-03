@@ -1,0 +1,22 @@
+{
+  "artifact_id": "sma-cross-hyperliquid_BTC-USD_1d-fix",
+  "dataset_key": "hyperliquid/BTC-USD/1d",
+  "dataset_sha256": "3745c2dfe3c341e0ce7a4e216c9697f88507f91f1ccf93e2bfcf4eac067eb9c2",
+  "discriminator": "sma-cross",
+  "feature_hash": "5b808ce04af0b7e9e187ed31458aa4a4",
+  "kind": "rule",
+  "params": {
+    "eps": 0.0,
+    "fast": 3,
+    "slow": 40
+  },
+  "sig": "5604c906b04272b0d1bd7b05dd42a6cd6b16dc617e7febc61700acd75cde63f2",
+  "wf": {
+    "cost_bps_flip": 8.0,
+    "dsr": 0.4894,
+    "embargo_bars": 2,
+    "folds": 4,
+    "grid_trials": 27,
+    "oos_sharpe": 0.8145
+  }
+}
