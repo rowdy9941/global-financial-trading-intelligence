@@ -1,0 +1,14 @@
+[project]
+name = "gfti-train"
+version = "0.1.0"
+description = "GFI non-LLM training lane (E4-WF walk-forward, DSR as-is)"
+requires-python = ">=3.11"
+dependencies = [
+    "duckdb>=2.0.0",
+    "pyarrow>=20.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
