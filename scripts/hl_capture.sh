@@ -18,6 +18,16 @@
 # NOT a relabel of the legacy `hyperliquid/BTC-USD/1d` row (A0 §4).
 set -euo pipefail
 
+# cron/systemd run with a minimal PATH: resolve the real tool locations
+# explicitly so the capture cannot fail silently under a scheduler.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+for tool in uv docker python3; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "hl_capture: MISSING prerequisite: $tool (PATH=$PATH)" >&2
+        exit 2
+    }
+done
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAYS="${1:-3}"
 COIN="BTC"
