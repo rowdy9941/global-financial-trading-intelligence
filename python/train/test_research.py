@@ -406,3 +406,41 @@ def test_concurrent_search_reservations_cannot_exceed_style_budget(tmp_path):
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert len(rows) == 3
     assert sorted(row["candidate_number"] for row in rows) == [1, 2, 3]
+
+
+# --- daily-lane guard + intraday ordering (discovered on real 1m data) ------
+
+def test_daily_lane_accepts_only_day_granularities():
+    from .walk_forward import require_daily_lane
+
+    for ok in ("1d", "1day", "day", "D"):
+        require_daily_lane(ok)
+
+
+def test_daily_lane_refuses_intraday_instead_of_emitting_numbers():
+    from .walk_forward import require_daily_lane
+
+    for bad in ("1m", "5m", "15m", "1h"):
+        with pytest.raises(SystemExit) as exc:
+            require_daily_lane(bad)
+        assert "not implemented" in str(exc.value)
+
+
+def test_load_close_orders_intraday_rows_by_open_ms_not_by_date(tmp_path):
+    """All 1m bars of a session share one ts_day; ordering by the date alone
+    silently scrambles the series (measured on hyperliquid/BTC-USDC/1m)."""
+    import duckdb
+
+    from .walk_forward import load_close
+
+    path = tmp_path / "intraday.parquet"
+    duckdb.sql(f"""
+        COPY (
+            SELECT * FROM (VALUES
+                ('2026-11-03', 1762_000_060_000::BIGINT, 101.0),
+                ('2026-11-03', 1762_000_000_000::BIGINT, 100.0),
+                ('2026-11-03', 1762_000_120_000::BIGINT, 102.0)
+            ) AS t(ts_day, open_ms, close)
+        ) TO '{path}' (FORMAT PARQUET)
+    """)
+    assert load_close(path) == [100.0, 101.0, 102.0]

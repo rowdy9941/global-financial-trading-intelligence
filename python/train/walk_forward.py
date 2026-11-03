@@ -52,14 +52,17 @@ def psql_query(sql: str) -> str:
     return r.stdout.strip()
 
 
-def resolve_dataset(dataset_key: str) -> tuple[Path, str]:
-    """D3 row must exist, be verified, and be B-GATE-clean."""
+def resolve_dataset(dataset_key: str) -> tuple[Path, str, str]:
+    """D3 row must exist, be verified, and be B-GATE-clean.
+
+    Also returns the registered granularity: the daily lane below is only
+    correct for day bars (see require_daily_lane)."""
     row = psql_query(
-        "SELECT d0_path, sha256, verified FROM d3.datasets "
+        "SELECT d0_path, sha256, verified, granularity FROM d3.datasets "
         f"WHERE dataset_key = '{dataset_key}'")
     if not row:
         raise RuntimeError(f"dataset {dataset_key} is not registered in D3")
-    d0_path, sha256, verified = row.split("|")
+    d0_path, sha256, verified, granularity = row.split("|")
     if verified != "t":
         raise RuntimeError(f"dataset {dataset_key} NOT verified in D3 "
                            "(B-GATE refuses training until gaps are closed)")
@@ -76,7 +79,25 @@ def resolve_dataset(dataset_key: str) -> tuple[Path, str]:
     if actual != sha256:
         raise RuntimeError(
             f"d0 sha256 mismatch: registry {sha256[:16]} vs file {actual[:16]}")
-    return p, sha256
+    return p, sha256, granularity
+
+
+_DAILY_GRANULARITIES = {"1d", "1day", "day", "d"}
+
+
+def require_daily_lane(granularity: str) -> None:
+    """The lane below orders by `ts_day` (a DATE string) and annualizes with
+    sqrt(252). Both assumptions break on intraday bars — every 1m bar shares
+    one ts_day, so ordering would be scrambled and the annualization wrong.
+    Refuse loudly instead of emitting meaningless statistics."""
+    if (granularity or "").lower() not in _DAILY_GRANULARITIES:
+        raise SystemExit(
+            f"intraday walk-forward is not implemented for granularity "
+            f"{granularity!r}: this lane is day-bar based (ts_day ordering, "
+            "sqrt(252) annualization, day-granular embargo). Resample the "
+            "capture to 1d or extend the lane — refusing to emit numbers that "
+            "would look real."
+        )
 
 
 def load_close(d0_path: Path) -> list[float]:
@@ -87,9 +108,13 @@ def load_close(d0_path: Path) -> list[float]:
     cols = [c[0] for c in rel.description]
     if "ts_day" not in cols or "close" not in cols:
         raise RuntimeError(f"unexpected parquet schema: {cols}")
+    # order by the true tick time when the schema carries it (intraday
+    # captures); ts_day is a DATE and ties across a whole session
+    order_col = "open_ms" if "open_ms" in cols else "ts_day"
     out = [
         float(r[0])
-        for r in duckdb.sql("SELECT close FROM rel ORDER BY ts_day").fetchall()
+        for r in duckdb.sql(f"SELECT close FROM rel ORDER BY {order_col}")
+        .fetchall()
     ]
     if len(out) < 2 or any(math.isnan(c) or c <= 0 for c in out):
         raise RuntimeError("d0 close series too short / non-positive / NaN")
@@ -271,7 +296,8 @@ def main() -> None:
     a.add_argument("--out", required=True, help="artifact JSON path")
     args = a.parse_args()
 
-    d0_path, dsha = resolve_dataset(args.dataset)
+    d0_path, dsha, granularity = resolve_dataset(args.dataset)
+    require_daily_lane(granularity)
     closes = load_close(d0_path)
     wf = walk_forward(closes, args.folds)
 
