@@ -44,3 +44,34 @@ Checks enforced per pilot: `decisions_gt_zero`, `e12_within_budget` (< 1,000,000
 - venue connectivity, real fills, or queue position (needs W2 adapters + real data);
 - profitability — DSR stays below the 0.95 promotion gate by design;
 - anything about P3's identity, which is still unfrozen.
+
+## Real-data arm (P1 only, 2026-11-04)
+
+Gate 7 asks for the fixture spine **and** the same spine on real registered data.
+P1 can run its real arm now; P2/P3 cannot (P2 needs owner broker credentials, P3's
+feed identity is not frozen).
+
+```
+uv run --project python/train python3 python/gates/pilot_e2e.py --real P1
+```
+
+It refuses to run unless the D3 row is `verified=true`, reads the local registered
+series (`d0/hyperliquid/BTC-USDC/1m.parquet`), and feeds the venue's **real open
+times and closes** into the same rail → cell → E7 → D4 path. Nothing is rescaled,
+smoothed or re-dated; `data_kind: "registered-1m"` and `real_registered_data: true`
+make the arm impossible to confuse with the fixture arm.
+
+```
+PILOT-E2E-SUITE {"data_kind": "registered-1m", "failed": [], "ok": true, "pilots": ["P1"]}
+PILOT-E2E {... "allows": 7, "decisions": 8, "intents": 7, "d4_fills": 7, "e7_fills": 7,
+             "bad_sigs": 0, "e12_p99_ns": 419, "dataset_key": "hyperliquid/BTC-USDC/1m",
+             "dataset_rows": 4320, "feed_span_ms": [1793752200000, 1793766540000],
+             "real_registered_data": true, "ok": true ...}
+```
+
+`bootstrap/install.sh --verify` runs both arms and skips the real one (loudly, with
+the reason) when the local archive is absent — `d0/` is not tracked in git, so a
+fresh checkout must skip rather than pretend.
+
+Still **not** proven by this arm: venue connectivity, real fills, queue position.
+The spine is exercised end to end on real prices; execution realism is W2.

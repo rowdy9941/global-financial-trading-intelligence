@@ -9,14 +9,23 @@ twice over the identical feed, with identical results both passes
 (deterministic spine). A second, sequential pass guards against the classic
 "works once because state leaked" failure.
 
-Data honesty (A0 §4/§7): this gate runs on **labelled synthetic fixture**
-feeds. It makes NO claim about venue data for any pilot, registers no D3
-dataset rows, and prints `"data_kind": "fixture-synthetic"` in every result.
-Real-data E2E for a pilot requires its registered dataset + verified D3 row
-and is a separate acceptance step. P1 identity remains BTC-USDC-PERP; no
-fixture here is ever relabelled as BTC-USD or Binance BTCUSDT.
+Data honesty (A0 §4/§7): two arms, never mixed up.
 
-Usage: uv run --project python/train python3 python/gates/pilot_e2e.py [P1|P2|P3|ALL]
+  * **fixture arm** (default) runs on labelled synthetic feeds. It makes NO claim
+    about venue data, registers nothing, and prints `data_kind:
+    "fixture-synthetic"` / `real_registered_data: false`.
+  * **real-data arm** (`--real P1`) feeds the REGISTERED `hyperliquid/BTC-USDC/1m`
+    bars — real venue closes and real open times — and refuses to run unless the
+    D3 row is `verified=true`. It prints `data_kind: "registered-1m"` and the
+    dataset key, so the two arms can never be confused in a report.
+
+P1 identity stays BTC-USDC-PERP; no feed here is ever relabelled as BTC-USD or
+Binance BTCUSDT. P2/P3 have no real-data arm because neither has a verified D3 row
+(P2 needs owner broker credentials, P3's feed identity is not frozen).
+
+Usage:
+  uv run --project python/train python3 python/gates/pilot_e2e.py [P1|P2|P3|ALL]
+  uv run --project python/train python3 python/gates/pilot_e2e.py --real P1
 """
 
 from __future__ import annotations
@@ -56,6 +65,7 @@ PILOTS = {
 
 TICKS = 220
 DECIDE_EVERY = 25
+REAL_TICKS = 240  # bounded, but long enough for the skeleton rule to alternate
 
 
 def fixture_closes() -> list[float]:
@@ -72,6 +82,51 @@ def fixture_closes() -> list[float]:
     if not all(c > 0 for c in closes):
         raise RuntimeError("fixture produced a non-positive price")
     return closes
+
+
+DATASETS = {"P1": "hyperliquid/BTC-USDC/1m"}
+
+
+def load_registered_1m(pid: str, limit: int) -> tuple[list[float], dict]:
+    """Real closes + open times from a REGISTERED dataset, gated on D3 `verified`.
+
+    Returns evenly spaced (by row) closes from the tail of the series so a run
+    stays bounded. Prices and timestamps are the venue's; nothing is rescaled,
+    smoothed or synthesised — a real-data arm that fudges its input would prove
+    nothing about the spine.
+    """
+    key = DATASETS[pid]
+    row = psql(
+        f"SELECT verified, rows FROM d3.datasets WHERE dataset_key = '{key}';"
+    ).strip()
+    if not row:
+        raise RuntimeError(f"{key}: no D3 row — refusing a real-data arm")
+    parts = [x.strip() for x in row.split("|")]
+    verified = parts[0].lower() in ("t", "true")
+    if not verified:
+        raise RuntimeError(f"{key}: D3 row is not verified — refusing a real-data arm")
+
+    import pyarrow.parquet as pq
+
+    path = REPO / "d0" / "hyperliquid" / "BTC-USDC" / "1m.parquet"
+    if not path.exists():
+        raise RuntimeError(f"missing local dataset {path} (d0/ is not tracked in git)")
+    table = pq.read_table(path, columns=["open_ms", "close"])
+    opens = table.column("open_ms").to_pylist()
+    closes = [float(x) for x in table.column("close").to_pylist()]
+    if len(closes) < limit:
+        raise RuntimeError(f"{path}: only {len(closes)} bars, need {limit}")
+    opens, closes = opens[-limit:], closes[-limit:]
+    if not all(c > 0 for c in closes):
+        raise RuntimeError("registered series contains a non-positive close")
+    return closes, {
+        "opens_ms": opens,
+        "dataset_key": key,
+        "rows_in_dataset": len(table),
+        "first_open_ms": opens[0],
+        "last_open_ms": opens[-1],
+        "d3_verified": True,
+    }
 
 
 def psql(sql: str) -> str:
@@ -115,7 +170,7 @@ def _reap() -> None:
         )
 
 
-def run_pilot(pid: str, closes: list[float]) -> dict:
+def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
     p = PILOTS[pid]
     symbol, subject = p["symbol"], p["subject"]
     e, _secret = w0b.owner_env()
@@ -134,11 +189,15 @@ def run_pilot(pid: str, closes: list[float]) -> dict:
     w0b.run(w0b.BIN / "ledger_kill", "resolve", "L4", f"{pid}-fixture-open", env=e)
 
     feed = SCRATCH / f"pilot_{pid}_feed.tsv"
-    base_ts = 1_760_000_000 * 1_000_000_000
+    if real is not None:
+        # real venue open times (1m spacing), so the rail sees the true sequence
+        stamps = [ms * 1_000_000 for ms in real["opens_ms"]]
+    else:
+        base_ts = 1_760_000_000 * 1_000_000_000
+        stamps = [base_ts + i * 86_400 * 1_000_000_000 for i in range(len(closes))]
     with open(feed, "w") as fh:
         fh.writelines(
-            f"{symbol} {base_ts + i * 86_400 * 1_000_000_000} {px} public\n"
-            for i, px in enumerate(closes)
+            f"{symbol} {ts} {px} public\n" for ts, px in zip(stamps, closes, strict=True)
         )
 
     children: list[subprocess.Popen] = []
@@ -246,8 +305,13 @@ def run_pilot(pid: str, closes: list[float]) -> dict:
         "pilot": pid,
         "symbol": symbol,
         "identity": p["identity"],
-        "data_kind": "fixture-synthetic",
-        "real_registered_data": False,
+        "data_kind": "registered-1m" if real else "fixture-synthetic",
+        "real_registered_data": real is not None,
+        "dataset_key": real["dataset_key"] if real else None,
+        "dataset_rows": real["rows_in_dataset"] if real else None,
+        "feed_span_ms": (
+            [real["first_open_ms"], real["last_open_ms"]] if real else None
+        ),
         "ticks": len(closes),
         "decisions": s2.get("decisions"),
         "allows": s2.get("allows"),
@@ -263,17 +327,30 @@ def run_pilot(pid: str, closes: list[float]) -> dict:
 
 
 def main() -> None:
-    which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"
+    argv = [a for a in sys.argv[1:] if a != "--real"]
+    real_arm = "--real" in sys.argv[1:]
+    which = argv[0].upper() if argv else "ALL"
     todo = list(PILOTS) if which == "ALL" else [which]
     if not all(pid in PILOTS for pid in todo):
         print(f"unknown pilot selector {which!r}; use P1|P2|P3|ALL")
         raise SystemExit(2)
+    if real_arm:
+        unsupported = [pid for pid in todo if pid not in DATASETS]
+        if unsupported:
+            print(
+                f"no real-data arm for {unsupported}: P2 needs owner broker "
+                "credentials, P3's feed identity is not frozen"
+            )
+            raise SystemExit(2)
 
     closes = fixture_closes()
     results = []
     for pid in todo:
         try:
-            res = run_pilot(pid, closes)
+            real = None
+            if real_arm:
+                closes, real = load_registered_1m(pid, REAL_TICKS)
+            res = run_pilot(pid, closes, real=real)
         except Exception as exc:  # noqa: BLE001 — a gate reports, never crashes silently  # gate must report, never crash silently
             res = {"pilot": pid, "ok": False, "error": f"{type(exc).__name__}: {exc}"}
         results.append(res)
@@ -287,7 +364,7 @@ def main() -> None:
                 "requested": which,
                 "pilots": [r.get("pilot") for r in results],
                 "failed": [r.get("pilot") for r in results if not r.get("ok")],
-                "data_kind": "fixture-synthetic",
+                "data_kind": "registered-1m" if real_arm else "fixture-synthetic",
                 "ok": ok,
             },
             sort_keys=True,

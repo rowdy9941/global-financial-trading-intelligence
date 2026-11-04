@@ -44,6 +44,16 @@ if $VERIFY; then
     echo "[--verify] G-PILOT-E2E (P1/P2/P3 fixture spine)"
     ( cd "$REPO/python/train" && uv run python3 "$REPO/python/gates/pilot_e2e.py" ALL ) \
         || { echo "INSTALL VERIFY FAILED (pilot E2E) — see gate output above"; exit 1; }
+    # Real-data arm: only where a pilot has BOTH a verified D3 row and the local
+    # archive (d0/ is not tracked in git, so a fresh checkout legitimately skips
+    # this). It is a separate claim from the fixture arm and is labelled as such.
+    if [ -f "$REPO/d0/hyperliquid/BTC-USDC/1m.parquet" ]; then
+        echo "[--verify] G-PILOT-E2E real-data arm (P1, registered 1m bars)"
+        ( cd "$REPO/python/train" && uv run python3 "$REPO/python/gates/pilot_e2e.py" --real P1 ) \
+            || { echo "INSTALL VERIFY FAILED (P1 real-data arm) — see gate output above"; exit 1; }
+    else
+        echo "[--verify] G-PILOT-E2E real-data arm SKIPPED (no d0/hyperliquid/BTC-USDC/1m.parquet)"
+    fi
 fi
 
 echo "install: OK ($REPO)"
