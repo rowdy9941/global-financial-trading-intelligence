@@ -330,21 +330,61 @@ baseline · open the W0a gate document.
 
 ## Repo map
 
+Directory structure as it actually exists on disk (verified 2026-11-04 by walking the
+tree, not copied from the plan). `*` = local artifact, deliberately **not** tracked.
+
 ```
-Global financial trading intelligence/
-├── README.md            ← this document (the full plan + all 10 diagrams)
-├── docs/plans/          the complete plan shelf: 15 PDFs + md sources + FINOS visual html
-├── docs/img/            the 10 architecture pages as PNGs (rendered from FINOS-TRADING-PLAN.pdf)
-├── rust/                the hot-path kernel: rail · featurize · evaluate · govern · exec · ledger
-├── python/              the edge: research · gates · seats · tools
-├── configs/             subjects · schemas · rights classes · calendars
-└── compose/             container stack: Postgres · QuestDB · NATS · cockpit
+global-financial-trading-intelligence/
+├── README.md                     this document
+├── bootstrap/
+│   └── install.sh                one installer: rust build + migrations + --verify gates
+├── rust/                         hot-path kernel — one cargo workspace, 8 crates
+│   ├── rail/                     R1 ingest rail: wire protocol, NATS fanout
+│   ├── d0/                       D0 parquet store (read/write, no business logic)
+│   ├── ledger/                   D3 registry · D4 append-only ledger · kill cascade · recon
+│   │   └── src/bin/              ledger_init · ledger_fill · ledger_kill · ledger_check
+│   │                             ledger_recon · ledger_watchdog · ledger_appr
+│   ├── engine/                   E3 decision engine (cell spine)
+│   ├── featurize/                E1 features
+│   ├── evaluate/                 E2 signed-artifact evaluation
+│   ├── govern/                   E5 deterministic governor (Allow/Deny authority)
+│   └── exec/                     E6 execution state — `Paper | Shadow` only, live absent
+├── python/                       the edge — seats and tooling, contracts across the wall
+│   ├── collect/                  collectors + tests: HL 1m/ticks, NSE, Kraken, Binance
+│   ├── train/                    research lane: walk_forward · metrics · features · validation
+│   ├── gates/                    every gate runner (W0b · W0c · W1 · B1 · D1 · pilot E2E · status)
+│   ├── seats/                    seat-side integration helpers
+│   ├── research/                 reserved — empty (.gitkeep only)
+│   └── tools/                    reserved — empty (.gitkeep only)
+├── scripts/
+│   ├── hl_capture.sh             1m capture every 15 min (--merge + flock, then derive 1d)
+│   └── hl_trades.sh              tick recorder, 55-min sessions under flock
+├── compose/
+│   ├── docker-compose.yml        postgres · questdb · nats
+│   ├── sql/001-006               ordered migrations (idempotent; D3/D4/D5/W0b/W0c/W1)
+│   ├── .env.example              required local values (no secrets committed)
+│   └── README.md                 stack notes
+├── docs/
+│   ├── plans/                    the plan shelf (md + pdf + FINOS visual html)
+│   ├── decisions/                A0-DECISION-BASELINE.md — the authoritative baseline
+│   ├── gates/                    evidence: W0a · W0b · W0c · W1 · B1 · P1-DATA · P2-DATA · PILOT-E2E
+│   └── img/                      rendered architecture pages
+├── .github/workflows/ci.yml      sql-idempotence · rust (fmt/clippy/test) · python (train+collect+lint)
+├── configs/                      reserved — empty (subject/schema config not yet authored)
+├── d0/*                          captured market data: parquet + tick segments (hashed by D3)
+├── d5/*                          artifacts written by the eval league
+└── data/d0/*                     local scratch data tree
 ```
 
-The language boundary is a wall (Rust kernel ⇄ Python seats, contracts across). The
-build starts at **W0a**; plan sources: `docs/plans/FULL-SYSTEM-BLUEPRINT.md` (pinned
-build doc) · `FULL-SYSTEM-MASTER-PLAN.md` (overview) · `AGENT-FLEET-BLUEPRINT.md` ·
-`ENGINE-DATABASE-PLAN.md` · `LLM-FLEET-BLUEPRINT.md` · the session log.
+Two boundaries the layout encodes: **language** (Rust kernel vs Python seats, contracts
+across) and **evidence** (`d0/` is where captured market data lives and it is
+untracked, as are the `d5/` artifacts and the `data/d0/` scratch tree — every claim
+about captured data is pinned by a D3 row holding a repo-relative path and sha256,
+never by having the bytes in git).
+
+Build starts at W0a. Plan sources: `docs/plans/FULL-SYSTEM-BLUEPRINT.md` (pinned build
+doc) · `FULL-SYSTEM-MASTER-PLAN.md` · `AGENT-FLEET-BLUEPRINT.md` ·
+`ENGINE-DATABASE-PLAN.md` · `LLM-FLEET-BLUEPRINT.md`.
 
 *No secrets in this repository (scanned at seed time). License: to be decided by the
 owner — unlicensed means all rights reserved.*
