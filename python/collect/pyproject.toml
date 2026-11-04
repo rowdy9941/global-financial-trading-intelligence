@@ -8,6 +8,7 @@ description = "Global financial trading intelligence — B1 data collectors"
 requires-python = ">=3.11"
 dependencies = [
     "pyarrow>=20.0",
+    "websockets>=14",
 ]
 
 [dependency-groups]
