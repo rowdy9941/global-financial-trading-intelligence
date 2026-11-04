@@ -216,20 +216,60 @@ def gate_watchdog():
                 and "state" in x]
     fc_ok = (rc_fc == 7 and len(fc_ticks) >= 3
              and all('"state":"failsafe"' in x for x in fc_ticks))
-    # (b) live transitions under observation
+    # (b) live transitions under observation.
+    #
+    # Measured 2026-11-04: this drill was sleep-driven and flaky on a loaded box —
+    # identical runs gave open_after_resolve_seen=false then true two minutes apart,
+    # with the engage tick slipping 244 ms -> 1,536 ms. Two changes, neither of which
+    # weakens the assertion:
+    #   * the sequence waits for the LEDGER STATE to actually change (ledger_check)
+    #     instead of sleeping a guessed interval;
+    #   * the observation window is 8 s, so a scheduling stall costs headroom rather
+    #     than silently consuming the post-resolve ticks the gate needs to see.
     live_log = SCRATCH / "w0b_watchdog_live.log"
     run(BIN / "ledger_kill", "resolve", "L4", "wd-reset")   # baseline open
+
+    def state_is(want: str, deadline_s: float) -> bool:
+        end = time.time() + deadline_s
+        while time.time() < end:
+            out = subprocess.run([str(BIN / "ledger_check")], env=LEDGER_ENV,
+                                 capture_output=True, text=True, check=False).stdout
+            if f'"state":"{want}"' in out:
+                return True
+            time.sleep(0.05)
+        return False
+
+    if not state_is("open", 5):
+        print("W0B-G6-WATCHDOG " + json.dumps({"ok": False, "error": "baseline not open"}))
+        return False
     p2 = subprocess.Popen(
         [str(BIN / "ledger_watchdog"), "--interval-ms", "250",
-         "--timeout-ms", "2600"],
+         "--timeout-ms", "8000"],
         env=LEDGER_ENV, stdout=open(live_log, "w"), stderr=subprocess.STDOUT, cwd=str(REPO))
-    time.sleep(0.7)
+    time.sleep(0.7)   # let it emit at least one baseline tick
     t_engage = int(time.time() * 1000)
     run(BIN / "ledger_kill", "engage", "L0", "W0b-watchdog-drill")
-    time.sleep(0.9)
+    engaged_ok = state_is("engaged", 5)
+    # Hold the engaged state until the WATCHDOG has actually sampled it. Making the
+    # sequence state-driven first shortened this window to ~60 ms — shorter than one
+    # 250 ms poll — so the watchdog never saw "engaged" and the gate failed a third
+    # time for a different reason (measured: engaged_seen empty in 2 of 3 runs).
+    # The assertion stays the same; the drill just stops racing its own observer.
+    engaged_seen_in_log = False
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        try:
+            seen = Path(live_log).read_text()
+        except OSError:
+            seen = ""
+        if '"state":"engaged"' in seen:
+            engaged_seen_in_log = True
+            break
+        time.sleep(0.05)
     t_resolve = int(time.time() * 1000)
     run(BIN / "ledger_kill", "resolve", "L4", "wd-resolve")
-    p2.wait(timeout=15)
+    resolved_ok = state_is("open", 5)
+    p2.wait(timeout=20)
     ticks = []
     for x in Path(live_log).read_text().splitlines():
         if x.startswith("LEDGER-WATCHDOG ") and "tunix_ms" in x:
@@ -237,12 +277,23 @@ def gate_watchdog():
     engaged_seen = [t["tunix_ms"] for t in ticks if t["state"] == "engaged"]
     open_after = [t["tunix_ms"] for t in ticks if t["state"] == "open"
                   and t["tunix_ms"] >= t_resolve]
-    live_ok = bool(engaged_seen and engaged_seen[0] >= t_engage - 300 and open_after)
+    live_ok = bool(
+        engaged_ok
+        and resolved_ok
+        and engaged_seen
+        and engaged_seen[0] >= t_engage - 300
+        and open_after
+    )
     engage_detect = (engaged_seen[0] - t_engage) if engaged_seen else None
     print("W0B-G6-WATCHDOG " + json.dumps({
         "failclosed_rc": rc_fc, "failclosed_tick_count": len(fc_ticks),
         "failclosed_all_failsafe": fc_ok,
         "live_ticks": len(ticks), "engaged_tick_ms_delta": engage_detect,
+        "state_reached": {
+            "engaged": engaged_ok,
+            "watchdog_sampled_engaged": engaged_seen_in_log,
+            "open_after_resolve": resolved_ok,
+        },
         "open_after_resolve_seen": bool(open_after), "ok": fc_ok and live_ok,
     }))
     return fc_ok and live_ok or False

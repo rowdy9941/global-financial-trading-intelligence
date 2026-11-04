@@ -46,6 +46,14 @@ jobs:
         run: uv run pytest -q
       - name: collect lint
         run: uvx ruff check python/collect/ --output-format concise
+      - name: gates lane (aggregator self-tests + lint)
+        # status.py decides whether every other gate is green, so it is tested here.
+        # Only the files this lane owns are linted: w0b_gates.py carries 22
+        # pre-existing ruff findings (subprocess without check=, SIM115) that predate
+        # this lane and are not silently swept in by it.
+        run: |
+          (cd python/train && uv run pytest -q ../gates/test_status.py)
+          uvx ruff check python/gates/status.py python/gates/test_status.py --output-format concise
 
   sql-idempotence:
     runs-on: ubuntu-latest
