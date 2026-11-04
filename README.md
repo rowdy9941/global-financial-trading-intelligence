@@ -523,6 +523,11 @@ artifact id; weekly digest auto-writes to the vault.
 | **Stage 6** | cockpit GA (O16 resolved) | L3 flow demo · weekly digest in vault |
 | **Stages 7–10** | Terminal/Portal/Media (rights-firewalled) · World Monitor LAST · HFT only if measured | Row-1 never touches the hot path |
 
+> **These are capability waves, not the order of work.** What must be true before the next kind of
+> work starts — one installable software first, then tick data, then training — is fixed in
+> [`docs/decisions/A1-FULL-SOFTWARE-ROADMAP.md`](docs/decisions/A1-FULL-SOFTWARE-ROADMAP.md).
+> W0c/W2/W3 do not start before Phase A closes.
+
 **Week-1 concrete instructions:** create the skeleton · Compose with healthchecks ·
 R1 minimal loop (validate → stamp → `market.*` → D0 parquet) · replay-harness CLI ·
 G1 bench stub · import the plans into `docs/` · create vault note types · Graphify
