@@ -76,6 +76,9 @@ services · 16 Python test modules.
 
 ## 4 · Build order
 
+The itemised inventory behind this order — every layer of the blueprint, each gap with file:line
+evidence and a Phase A/B/C tag — is [A2](A2-GAP-INVENTORY.md). This section stays the summary.
+
 ### Phase A — one software (no data, no training)
 
 Exit pin: **on a clean checkout, one command installs, starts, and reports healthy; the same
