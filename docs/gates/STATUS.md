@@ -48,7 +48,7 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 | 5 | **G-DATA** | `blocked` | capture green; D3 `BTC-USDC/1m` = 4,440 rows, **`BTC-USDC/1d` = 1,347 (native)**, `BTC-USDC/1d-derived` = 2, `BTC-USD/1d` = 1,346 — blocked only by the Kraken archive |
 | 6 | **G-RESEARCH** | `OK` | `w1_gates.py ALL` all cases true |
 | 7 | **G-PILOT-E2E** | `blocked` | fixture P1/P2/P3 green · real-data P1 green · P2/P3 await owner inputs |
-| 8 | **G-CI-OS** | `OK` | CI run `41784249872` green on `85e0aee`; includes the new gates lane |
+| 8 | **G-CI-OS** | `OK` | CI run `41790857772` green on `6b466c6` (the code change; the docs-only follow-up re-runs the same workflow) |
 
 Five gates are locally closable and closed. Two are blocked on the owner, by design;
 neither is a code defect and neither is reported as green.
