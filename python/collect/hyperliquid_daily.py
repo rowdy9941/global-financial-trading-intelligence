@@ -316,6 +316,72 @@ def to_parquet(bars: list[dict], out: Path) -> dict:
     return {"path": str(out), "sha256": digest, "rows": t.num_rows}
 
 
+def read_parquet_rows(path: Path) -> list[dict]:
+    """Read a previously written artifact back into bar dicts (collector schema)."""
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(path)
+    cols = {name: table.column(name).to_pylist() for name in table.column_names}
+    rows = []
+    for i in range(table.num_rows):
+        rows.append(
+            {
+                "ts_day": cols["ts_day"][i],
+                "open_ms": int(cols["open_ms"][i]),
+                "close_ms": int(cols["close_ms"][i]),
+                "open": Decimal(str(cols["open"][i])),
+                "high": Decimal(str(cols["high"][i])),
+                "low": Decimal(str(cols["low"][i])),
+                "close": Decimal(str(cols["close"][i])),
+                "volume": Decimal(str(cols["volume"][i])),
+                "n_trades": int(cols["n_trades"][i]),
+            }
+        )
+    return rows
+
+
+def merge_bars(existing: list[dict], new: list[dict]) -> tuple[list[dict], dict]:
+    """Union an existing archive with a freshly captured window, by `open_ms`.
+
+    Why this exists: the public API retains ~3 days of 1m bars, so a capture that
+    simply REWRITES the trailing window never grows — it stays at three days
+    forever (measured 2026-11-04: rows == 4,320 == exactly 3 days, every run).
+    Accumulation requires a union with the local archive.
+
+    Conflict rule: a closed bar is immutable, so an overlap must be identical. If
+    the venue's numbers for an already-captured minute differ, the EXISTING row is
+    kept and the difference is reported as a `revision` — silently adopting either
+    side would rewrite history without evidence.
+    """
+    merged: dict[int, dict] = {b["open_ms"]: b for b in existing}
+    added = 0
+    overlapping = 0
+    revisions = []
+    for bar in new:
+        prev = merged.get(bar["open_ms"])
+        if prev is None:
+            merged[bar["open_ms"]] = bar
+            added += 1
+            continue
+        overlapping += 1
+        fields = ("open", "high", "low", "close", "volume", "n_trades")
+        diff = {f: [str(prev[f]), str(bar[f])] for f in fields if prev[f] != bar[f]}
+        if diff:
+            revisions.append(
+                {"open_ms": bar["open_ms"], "kept": "existing", "diff": diff}
+            )
+    ordered = [merged[k] for k in sorted(merged)]
+    return ordered, {
+        "existing_rows": len(existing),
+        "new_rows": len(new),
+        "added": added,
+        "overlapping": overlapping,
+        "revisions": len(revisions),
+        "revision_examples": revisions[:5],
+        "merged_rows": len(ordered),
+    }
+
+
 def main() -> None:
     a = argparse.ArgumentParser()
     a.add_argument("--coin", required=True)
@@ -340,6 +406,13 @@ def main() -> None:
         help="aligned exclusive end for a bounded capture",
     )
     a.add_argument("--max-windows", type=int, default=64)
+    a.add_argument(
+        "--merge",
+        action="store_true",
+        help="union the captured window with the existing --out archive instead of "
+        "replacing it; required for any scheduling whose window is shorter than "
+        "the history you intend to keep",
+    )
     args = a.parse_args()
 
     step_ms = VALID_INTERVALS[args.interval]
@@ -373,6 +446,11 @@ def main() -> None:
         until_ms = args.end_ms
     bars_full = normalize(raw, until_ms)
     bars, onset_day, excluded = venue_onset(bars_full)
+    merge_report = None
+    out_path = Path(args.out)
+    if args.merge and out_path.exists():
+        bars, merge_report = merge_bars(read_parquet_rows(out_path), bars)
+        bars = sorted(bars, key=lambda b: b["open_ms"])
     errs, n, holes = integrity_check(bars, args.coin, step_ms)
     if errs:
         raise RuntimeError(f"INTEGRITY FAIL: {errs}")
@@ -399,6 +477,16 @@ def main() -> None:
         "returned_bar_rows": len(raw),
         "missing_bar_slots": (
             expected_bar_slots - len(raw) if expected_bar_slots is not None else None
+        ),
+        "archive": (
+            {
+                **merge_report,
+                "span_open_ms": [bars[0]["open_ms"], bars[-1]["open_ms"]],
+                "expected_slots": (bars[-1]["open_ms"] - bars[0]["open_ms"]) // step_ms
+                + 1,
+            }
+            if merge_report is not None
+            else None
         ),
         "artifact": art,
         "integrity": "PASS",

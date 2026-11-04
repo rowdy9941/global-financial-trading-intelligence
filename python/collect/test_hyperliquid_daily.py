@@ -239,3 +239,79 @@ def test_fetch_range_rejects_unaligned_bounds_and_overlapping_pages() -> None:
             hl.fetch_range("BTC", "1m", minute, minute * 6, _post=overlap)
     finally:
         hl.WINDOW_CANDLES = original
+
+
+# --- archive merge (accumulation is impossible without it) -------------------
+
+
+def _bar(minute_ms: int, px: str = "77000.0", vol: str = "1.5", n: int = 10) -> dict:
+    return {
+        "ts_day": "2026-11-04",
+        "open_ms": minute_ms,
+        "close_ms": minute_ms + 59_999,
+        "open": Decimal(px),
+        "high": Decimal(px),
+        "low": Decimal(px),
+        "close": Decimal(px),
+        "volume": Decimal(vol),
+        "n_trades": n,
+    }
+
+
+M0 = 1_793_760_000_000
+
+
+def test_merge_adds_new_minutes_and_keeps_the_archive():
+    existing = [_bar(M0), _bar(M0 + 60_000)]
+    new = [_bar(M0 + 120_000)]
+    merged, report = hl.merge_bars(existing, new)
+    assert [b["open_ms"] for b in merged] == [M0, M0 + 60_000, M0 + 120_000]
+    assert report["added"] == 1
+    assert report["existing_rows"] == 2
+    assert report["merged_rows"] == 3
+    assert report["revisions"] == 0
+
+
+def test_merge_is_idempotent_for_identical_overlap():
+    bars = [_bar(M0), _bar(M0 + 60_000)]
+    merged, report = hl.merge_bars(bars, bars)
+    assert merged == bars
+    assert report["added"] == 0
+    assert report["overlapping"] == 2
+    assert report["revisions"] == 0
+
+
+def test_merge_keeps_the_existing_row_when_the_venue_changed_history():
+    existing = [_bar(M0, px="77000.0")]
+    new = [_bar(M0, px="77001.0")]
+    merged, report = hl.merge_bars(existing, new)
+    assert merged[0]["open"] == Decimal("77000.0"), "a closed bar is immutable"
+    assert report["revisions"] == 1
+    # helper sets every price field to px, so all four OHLC fields differ
+    assert set(report["revision_examples"][0]["diff"]) == {
+        "open",
+        "high",
+        "low",
+        "close",
+    }
+    assert report["revision_examples"][0]["diff"]["open"] == ["77000.0", "77001.0"]
+    assert report["revision_examples"][0]["kept"] == "existing"
+
+
+def test_merge_output_is_sorted_even_when_inputs_are_not():
+    merged, _ = hl.merge_bars([_bar(M0 + 120_000)], [_bar(M0), _bar(M0 + 60_000)])
+    assert [b["open_ms"] for b in merged] == sorted(b["open_ms"] for b in merged)
+
+
+def test_a_window_rewrite_would_not_grow_but_merge_does():
+    """The bug this exists for: a 3-day rolling window rewritten each run stays
+    at 3 days forever (measured: 4,320 rows every run)."""
+    archive = [_bar(M0 + i * 60_000) for i in range(3 * 1440)]
+    window = [b for b in archive[-1440:]]  # trailing day re-captured
+    new_day = [_bar(M0 + (3 * 1440 + i) * 60_000) for i in range(1440)]
+    window.append(new_day[0])
+    _, rewritten = hl.merge_bars([], window)  # what rewrite-only kept
+    _, merged = hl.merge_bars(archive, window + new_day)
+    assert rewritten["merged_rows"] == 1441
+    assert merged["merged_rows"] == 3 * 1440 + 1440
+    assert merged["added"] == 1440

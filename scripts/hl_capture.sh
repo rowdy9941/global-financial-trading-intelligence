@@ -9,10 +9,16 @@
 #   */15 * * * * /home/madava/global-financial-trading-intelligence/scripts/hl_capture.sh \
 #       >> ~/.cache/gfti/hl_capture.log 2>&1
 #
-# Each run re-captures the trailing window (default 3 days), rewrites the D0
-# artifact and UPSERTs the D3 registry row (the registry is a mutable manifest;
-# D4 remains the append-only ledger). Capture is deterministic: identical
-# windows produce byte-identical parquet (proven by sha256 equality).
+# Each run re-captures the trailing window (default 3 days) and MERGES it into
+# the local archive (`--merge`), then UPSERTs the D3 registry row (the registry
+# is a mutable manifest; D4 remains the append-only ledger). Capture is
+# deterministic: identical windows produce byte-identical parquet.
+#
+# Why --merge is not optional: the public API retains only ~3 days of 1m bars, so
+# a run that just REWRITES the trailing window can never grow the archive — it
+# stays at 3 days forever (measured 2026-11-04: 4,320 rows on every run, which
+# would have made the 300-bar training target unreachable no matter how long the
+# cron ran). A single-instance lock prevents two runs from rewriting one artifact.
 #
 # Identity: BTC-USDC — the venue-native quote of the Hyperliquid perp. This is
 # NOT a relabel of the legacy `hyperliquid/BTC-USD/1d` row (A0 §4).
@@ -21,7 +27,7 @@ set -euo pipefail
 # cron/systemd run with a minimal PATH: resolve the real tool locations
 # explicitly so the capture cannot fail silently under a scheduler.
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
-for tool in uv docker python3; do
+for tool in uv docker python3 flock; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "hl_capture: MISSING prerequisite: $tool (PATH=$PATH)" >&2
         exit 2
@@ -45,11 +51,20 @@ print(start, end)
 PY
 )
 
+# One capture at a time: two runs writing the same parquet is a corruption
+# hazard, and at boot cron can fire while an earlier run is still alive.
+LOCK="${TMPDIR:-/tmp}/gfti_hl_capture.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+    echo "hl_capture: another capture holds $LOCK — nothing to do"
+    exit 0
+fi
+
 cd "$REPO/python/collect"
 uv run hyperliquid_daily.py \
     --coin "$COIN" --interval "$INTERVAL" --symbol "$SYMBOL" \
     --start-ms "$START_MS" --end-ms "$END_MS" \
-    --out "$REPO/$OUT_REL" --summary "$SUMMARY" >/dev/null
+    --out "$REPO/$OUT_REL" --summary "$SUMMARY" --merge >/dev/null
 
 uv run register_b1.py \
     --summary "$SUMMARY" --d0-path "$OUT_REL" \
