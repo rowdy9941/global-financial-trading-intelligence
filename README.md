@@ -26,7 +26,9 @@ full structures spelled out under each.
 > grants/week then rc 7) — **W0b complete** (G1–G8). **B1 started**:
 > real 9.2y capture (BTCUSDT 1d, 3,362 bars from 2017-08-17, key-free
 > source, integrity PASS, dual-run determinism, D3 registry verified,
-> training-lock enforced) — see `docs/gates/W0b.md`, `docs/gates/B1.md`.> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
+> training-lock enforced) — see `docs/gates/W0b.md`, `docs/gates/B1.md`.
+
+> Labels used everywhere below: **ESTIMATE** = projected, measured at its named gate ·
 > **MEASURED** = real recorded output · unlabelled = a locked decision from the sessions.
 
 ---
@@ -325,6 +327,11 @@ baseline · open the W0a gate document.
   membership vendor (W2) · **O16** cockpit runtime (W0c).
 - This plan set contains **zero unverifiable performance claims** — anything
   vendor- or author-reported keeps its label until we measure it.
+- **Where the current verdicts live:** `python/gates/status.py` runs the eight A0 §7
+  gates and reports `ok` / `FAIL` / `blocked` / `not-run` per gate; the evidence table,
+  the FANOUT latency measurements and every owner-blocked item are recorded in
+  [`docs/gates/STATUS.md`](docs/gates/STATUS.md). A gate that cannot run is printed as
+  `blocked`, never as green.
 
 ---
 

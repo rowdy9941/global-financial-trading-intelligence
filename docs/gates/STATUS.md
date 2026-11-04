@@ -48,14 +48,14 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 | 5 | **G-DATA** | `blocked` | capture green; D3 `BTC-USDC/1m` = 4,380 rows, `BTC-USDC/1d` = 2, `BTC-USD/1d` = 1,346 — see below |
 | 6 | **G-RESEARCH** | `OK` | `w1_gates.py ALL` all cases true |
 | 7 | **G-PILOT-E2E** | `blocked` | fixture P1/P2/P3 green · real-data P1 green · P2/P3 await owner inputs |
-| 8 | **G-CI-OS** | `blocked` | newest green CI run is on an earlier commit; the tree has moved past it |
+| 8 | **G-CI-OS** | `OK` | CI run `41784249872` green on `85e0aee`; includes the new gates lane |
 
 Four gates are locally closable and closed. Two are blocked on the owner, by design,
 and one of those blocks is the only thing standing between now and training.
 
-G-CI-OS is `blocked` rather than `OK` because the aggregator refuses to certify a
-commit CI has never seen — the newest green run predates this tree. It flips to `OK`
-only after the workflow completes on the commit that contains this file.
+G-CI-OS only flips to `OK` once the workflow completes on the *exact* commit being
+reported — the aggregator refuses to certify a tree CI has never seen, and printed
+`stale: tree HEAD is …` until this commit's run went green.
 
 ## Gate 3 — FANOUT is the marginal gate, and it is measured, not asserted
 
