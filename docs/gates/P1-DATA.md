@@ -46,6 +46,32 @@ registrar defaults to for daily spot captures. `register_b1.py` gained
 `--pre-inception-note` for exactly this; a misleading justification is worse than
 no row.
 
+## 2.1 · The archive must MERGE, or accumulation never happens (fixed 2026-11-04)
+
+The first version of `scripts/hl_capture.sh` re-captured the trailing 3-day window
+and **rewrote** the artifact. Because the venue retains only ~3 days of 1m bars,
+that window is all the archive could ever hold: measured on 2026-11-04, every run
+produced exactly **4,320 rows = 3 days**, no matter how long cron ran. The plan's
+"accumulate toward the 300-bar WF minimum" was therefore unreachable — the series
+would have stayed at 2–3 usable days forever, and nothing in the pipeline would
+have complained.
+
+Fix: `hyperliquid_daily.py --merge` unions the captured window with the existing
+archive by `open_ms` (a closed bar is immutable; if the venue's numbers for an
+already-captured minute differ, the existing row is kept and the difference is
+reported as a `revision`, never silently adopted). `hl_capture.sh` now always passes
+`--merge` and holds an `flock` so two runs can never rewrite one artifact.
+
+Proof on live data (window deliberately shortened to 1 day against the 3-day
+archive):
+
+```
+capture window 1 day  →  archive rows 4,322   (a rewrite would have left 1,440)
+capture window 3 days →  archive rows 4,320   (sha identical, so merge is idempotent)
+```
+
+The remaining 2 rows are the minutes captured between the two runs.
+
 ## 3 · Derived daily projection (how accumulation reaches the training lane)
 
 The WF lane is day-bar based and **refuses intraday datasets**
@@ -69,8 +95,10 @@ uv run resample_1m_to_1d.py --d0-path ../../d0/hyperliquid/BTC-USDC/1m.parquet \
     --out ../../d0/hyperliquid/BTC-USDC/1d.parquet --summary /tmp/hl_1d.json
 ```
 
-Result on the 4,320-bar capture: **2 complete days kept** (2026-11-01, 11-02),
-**2 edge days dropped** (10-31 with 1,035/1,440 bars, 11-03 with 405/1,440).
+Result on the 4,320-bar capture: **2 complete days kept**, **2 edge days dropped**
+(the capture window always cuts the first and last day). Re-run on 2026-11-04 the
+kept days are 11-02 and 11-03 — the pair advances with the window, which is exactly
+what §2.1 fixes.
 Registered as `hyperliquid/BTC-USDC/1d` with the lineage in `source`:
 `derived:resample-1m-to-1d:hyperliquid/BTC-USDC/1m:sha-<digest>`.
 
@@ -227,10 +255,12 @@ of it to be worth a registered derivation.
    holes must be caught by the collector's own `missing_bar_slots` check, not the
    registry.
 2. **Not enough bars to train yet.** The derived 1d projection currently has
-   **2 bars**; the lane refuses with `data too short for even one fold: 2 bars
-   at folds=6 needs at least 300 bars`, so no artifact can be produced until
-   accumulation reaches ~300 days. The DSR/WF gate stays the promotion
-   authority (0.4894 on the legacy daily row, below the 0.95 gate).
+   **2 bars** (11-02, 11-03); the lane refuses with `data too short for even one
+   fold: 2 bars at folds=6 needs at least 300 bars`. Now that §2.1 makes the
+   archive grow by one day per day, this is a matter of elapsed time rather than a
+   design defect — but it is still ~10 months away, and no artifact can exist
+   before then. The DSR/WF gate stays the promotion authority (0.4894 on the
+   legacy daily row, below the 0.95 gate).
 3. **Ticks are not a registered dataset.** They are raw append-only evidence
    under `d0/` with no D3 row: `verified=true` must never be claimed on a
    self-captured feed alone. The only admissible derivation is the venue-checked
