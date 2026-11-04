@@ -33,6 +33,226 @@ full structures spelled out under each.
 
 ---
 
+## Repository structure
+
+Directory structure as it actually exists on disk, verified **2026-11-04** by walking the
+tree — not copied from the plan. Every path exists; descriptions come from each module's
+own docstring. `*` / `†` = local artifact, deliberately **not** tracked.
+
+### Scale
+
+| Measure | Value |
+|---|---|
+| Tracked files | **162** |
+| Rust | 45 files · **28 `.rs`** · 3,589 lines |
+| Python | 48 files · **40 `.py`** · 11,953 lines |
+| SQL migrations | 6 files · 629 lines |
+| Docs | 53 files (32 plan docs · 10 diagrams · 8 gate records · 1 baseline · 2 specs) |
+| Untracked data on disk | `d0/` 135 MB · `data/d0/` 1.8 GB · `d5/` 152 KB |
+
+Two artifacts are deliberately **not** counted above: `rust/target/` (build output) and
+`python/*/​.venv/` (per-package virtualenvs). Both are ignored and neither is part of the
+design.
+
+### Tree
+
+```
+global-financial-trading-intelligence/
+│
+├── README.md                         the plan, the ten diagrams, the honesty register
+├── .gitignore                        what may never be committed (see "Ignored" below)
+├── .gitattributes                    line-ending + binary handling
+│
+├── bootstrap/
+│   └── install.sh                    one installer: cargo build → migrations → --verify gates
+│                                     (--verify runs W1 and BOTH pilot-E2E arms: fixture + real P1)
+│
+├── rust/                             hot-path kernel — one cargo workspace, edition 2024, LTO release
+│   ├── Cargo.toml                    workspace: 8 members · resolver 2 · release lto=true
+│   ├── Cargo.lock
+│   │
+│   ├── rail/                         R1 ingest rail
+│   │   ├── src/lib.rs        (191)   crate root, public surface
+│   │   ├── src/main.rs        (98)   reads one row per stdin line → rail
+│   │   ├── src/wire.rs       (234)   the wire protocol
+│   │   ├── src/ilp.rs        (190)   ILP-TCP writer (QuestDB ingest)
+│   │   └── src/bin/
+│   │       ├── rail_sub.rs    (65)   subscriber: subject fan-out
+│   │       ├── d1_ingest.rs   (52)   D1 ingest exerciser (production ILP path, synthetic rows)
+│   │       ├── replay.rs      (48)   deterministic replay from captured rows
+│   │       ├── bench.rs       (47)   throughput bench
+│   │       ├── bench_ilp.rs   (51)   ILP path bench
+│   │       └── bench_wire.rs  (81)   wire codec bench
+│   │
+│   ├── d0/                           cold store — columnar parquet
+│   │   ├── src/lib.rs        (232)   stamped rows → parquet; sort-stable by ts_nanos
+│   │   └── src/bin/d0_dump.rs (39)   CLI dumper
+│   │
+│   ├── ledger/                       D3 registry · D4 append-only ledger · kill cascade · recon
+│   │   ├── src/lib.rs        (450)   registry, append-only enforcement, kill state machine
+│   │   └── src/bin/                  seven binaries, one per operational verb:
+│   │       ├── ledger_init.rs     (33)   apply schema / bootstrap
+│   │       ├── ledger_fill.rs     (71)   write a signed fill (HMAC)
+│   │       ├── ledger_kill.rs     (30)   engage | resolve the kill cascade
+│   │       ├── ledger_check.rs    (35)   exit 0 = open · exit 7 = engaged/failsafe (fail-closed)
+│   │       ├── ledger_recon.rs    (52)   reconcile positions against fills
+│   │       ├── ledger_watchdog.rs (98)   out-of-band observer, --strict exits 7 on DB loss
+│   │       └── ledger_appr.rs    (104)   approval flow (L1/L2/L3 ladder)
+│   │
+│   ├── engine/                       E3 decision engine — the cell spine
+│   │   ├── src/lib.rs         (41)   re-exports the spine
+│   │   └── src/bin/
+│   │       ├── cell.rs       (222)   THE decision cell: E1→E2→E5→E6 per tick
+│   │       └── e7.rs          (93)   E7 ledger process: order.* → signed D4 fills
+│   │
+│   ├── featurize/                    E1 — in-process pre-warmed state (ring-buffer SMAs), µs-class
+│   │   └── src/lib.rs        (220)
+│   │
+│   ├── evaluate/                     E2 — frozen-artifact evaluator
+│   │   ├── src/lib.rs        (231)
+│   │   └── tests/artifact.json       signed artifact fixture
+│   │
+│   ├── govern/                       E5 — deterministic governor, sole Allow/Deny authority
+│   │   └── src/lib.rs        (109)
+│   │
+│   ├── exec/                         E6 — execution state
+│   │   ├── src/lib.rs        (341)   `enum Mode { Paper, Shadow }` — **live absent at type level**
+│   │   └── tests/spine.rs    (131)   integration test
+│   │
+│   └── (each crate also carries Cargo.toml; several keep a .gitkeep from scaffold time)
+│
+├── python/                           the edge — off the decision path, contracts across the wall
+│   ├── collect/                      data acquisition + its tests (5,138 lines)
+│   │   ├── hyperliquid_daily.py    (503)  HL BTC-USD/1d perp candles (REST candleSnapshot)
+│   │   ├── hl_trades_ws.py         (427)  HL trade-tick recorder — the ONLY route to genuine ticks
+│   │   ├── kraken_full_trades.py   (547)  Kraken public full-trade archive → verify → convert
+│   │   ├── nse_fo_bhavcopy.py      (376)  NSE F&O bhavcopy — NIFTY index-options history
+│   │   ├── histdata_daily.py       (380)  HistData.com XAU/USD M1 + derived daily (GOLD fallback)
+│   │   ├── binance_daily.py        (182)  Binance daily bars (B1 opener, free tier)
+│   │   ├── derive_1m_from_trades.py(315)  ticks → 1m, then cross-checks the VENUE's own candle
+│   │   ├── resample_1m_to_1d.py    (215)  1m → 1d projection (complete days kept, edges dropped)
+│   │   ├── recover_trades_segments.py(159) salvage ticks after an ungraceful kill
+│   │   ├── register_b1.py          (334)  collector run → D3 (manifest + gap calendar)
+│   │   ├── pyproject.toml / uv.lock
+│   │   └── test_*.py                9 files, 1,700 lines — one per collector
+│   │
+│   ├── gates/                        every gate runner (3,509 lines)
+│   │   ├── status.py               (611)  **G-STATUS**: the 8 A0 gates → one verdict each
+│   │   ├── w0b_gates.py            (503)  W0b: append-only · kill drill · RESTART ×10 · recon ·
+│   │   │                                  FANOUT (2 ms p99 budget) · WATCHDOG · ENGINE · approval
+│   │   ├── w1_gates.py             (491)  W1: DSR certification · crisis replay · cost cap
+│   │   ├── pilot_e2e.py            (378)  G-PILOT-E2E: fixture arm (P1/P2/P3) + --real P1 arm
+│   │   ├── w0c_seats.py            (432)  W0c: seat-role permissions (d3_seat_runtime)
+│   │   ├── w0c_tasks.py            (410)  W0c: D3 durable seat-task queue
+│   │   ├── b1_gates.py             (269)  B1: capture → verify → registry → B-GATE
+│   │   ├── d1_gates.py             (247)  W0a pin 2: five D1 (QuestDB) store gates
+│   │   ├── _env.py                  (71)  shared harness: scratch dirs, release dirs
+│   │   ├── test_status.py           (97)  self-tests for the aggregator (5 cases)
+│   │   └── .gitkeep
+│   │
+│   ├── train/                        research lane (nightly, off-peak)
+│   │   ├── walk_forward.py         (341)  E4-WF walk-forward trainer (the W1 non-LLM lane)
+│   │   ├── features.py             (537)  causal, source-aware resampling + indicators
+│   │   ├── validation.py           (156)  calendar-day grouped combinatorial validation + sealed holdout
+│   │   ├── metrics.py              (226)  cost-aware metrics; DSR disabled until a published reference
+│   │   ├── alpha_search.py         (214)  preregistered, append-only attempt accounting
+│   │   ├── colab_runner.py         (524)  optional Colab T4 execution lane
+│   │   ├── __init__.py               (0)
+│   │   ├── pyproject.toml / uv.lock
+│   │   └── test_*.py                3 files, 971 lines
+│   │
+│   ├── seats/
+│   │   ├── queue_worker.py         (337)  seat-side task worker (role d3_seat_runtime, typed exits)
+│   │   └── .gitkeep
+│   │
+│   ├── research/                     RESERVED — empty (.gitkeep only)
+│   └── tools/                        RESERVED — empty (.gitkeep only)
+│
+├── scripts/
+│   ├── hl_capture.sh                 1m capture every 15 min: flock + --merge + derive 1d
+│   └── hl_trades.sh                  tick recorder, 55-min sessions under flock
+│
+├── compose/
+│   ├── docker-compose.yml            postgres · questdb · nats
+│   ├── .env.example                  required local values (no secrets committed)
+│   ├── README.md                     stack notes
+│   └── sql/                          ordered, idempotent migrations
+│       ├── 001_d3_d4_init.sql        D3 registry + D4 append-only ledger
+│       ├── 002_w0b_approval_flow.sql L1/L2/L3 approval ladder
+│       ├── 003_b1_data_plane.sql     B1 data plane
+│       ├── 004_w0c_llm_tasks.sql     seat-task queue + roles
+│       ├── 005_w1_artifacts.sql      W1 signed artifacts
+│       └── 006_d3_intraday_metadata.sql  intraday identity (the 1m/1d split)
+│
+├── docs/
+│   ├── decisions/
+│   │   └── A0-DECISION-BASELINE.md   THE authoritative baseline: §2 OS tiers · §7 gates 1-8 ·
+│   │                                 §8 phase order · §9 decision log
+│   ├── gates/                        one record per gate, with measured output
+│   │   ├── STATUS.md                 G-STATUS aggregate: current verdict per gate
+│   │   ├── W0a.md  W0b.md  W0c.md    store · runtime pins · seat/task control plane
+│   │   ├── B1.md                     data plane
+│   │   ├── P1-DATA.md                Hyperliquid BTC-USDC: retention, merge fix, ticks, venue check
+│   │   ├── P2-DATA.md                NIFTY options — blocked on broker credentials
+│   │   └── PILOT-E2E.md              the end-to-end fixture + real-data arms
+│   ├── plans/                        32 documents: 16 md + 15 pdf + 1 self-contained html
+│   │   ├── FULL-SYSTEM-BLUEPRINT.md/.pdf      ← the pinned build doc (cited as "blueprint §N")
+│   │   ├── FULL-SYSTEM-MASTER-PLAN.md/.pdf    overview
+│   │   ├── FULL-SYSTEM-PLAN.md/.pdf
+│   │   ├── FINOS-TRADING-PLAN.md/.pdf/.html   the visual edition (renders the 10 diagrams)
+│   │   ├── ENGINE-DATABASE-PLAN.md/.pdf
+│   │   ├── LLM-FLEET-BLUEPRINT.md/.pdf
+│   │   ├── AGENT-FLEET-BLUEPRINT.md/.pdf
+│   │   ├── AGENT-ECOSYSTEM-MASTER.md/.pdf
+│   │   ├── AGENT-PRODUCTION-BUILD-PLAN.md/.pdf
+│   │   ├── FIRST-BATCH-NON-LLM-AGENTS.md/.pdf
+│   │   ├── DATA-GATHERING-PLAN-V3.md/.pdf
+│   │   ├── DATA-PLAN-3SYMBOLS.md               (md only — no pdf)
+│   │   ├── DATASET-TODO.md/.pdf
+│   │   ├── FX-SCALPING-BUILD-PLAN.md/.pdf
+│   │   ├── OPTIONS-BUYING-SCOPE.md/.pdf
+│   │   └── QUANT-TRADING-ALPHA-EXPLAINED.md/.pdf
+│   ├── img/                          10 PNGs, finos-p01..p10 — the architecture pages
+│   └── superpowers/
+│       ├── plans/2026-11-02-intraday-alpha-research.md
+│       └── specs/2026-11-02-intraday-alpha-research-design.md
+│
+├── .github/workflows/ci.yml          three jobs: rust (fmt/clippy/test) · python
+│                                     (train · collect · collect-lint · gates) · sql-idempotence
+│
+├── configs/                          RESERVED — empty (subject/schema config not yet authored)
+│
+├── d0/ †                             135 MB, 15 files — captured market data, hashed by D3
+│   ├── hyperliquid/
+│   │   ├── BTC-USDC/
+│   │   │   ├── 1m.parquet            the P1 intraday identity
+│   │   │   ├── 1d.parquet            DERIVED from 1m (complete days only)
+│   │   │   ├── 1m-ticks-verified.parquet  bars whose maker ticks matched the venue
+│   │   │   └── trades/               tick segments, JSONL.gz, one per hour (+ .corrupt backups
+│   │   │                             kept from the 2026-11-03 corruption incident)
+│   │   └── BTC-USD/
+│   │       └── 1d.parquet            the LEGACY daily identity — never relabelled
+│   ├── nse_fo/NIFTY-OPT/
+│   │   └── 1d.parquet                133 MB — NIFTY option chain history
+│   └── histdata/XAU-USD/
+│       └── 1d.parquet                GOLD fallback series
+│
+├── d5/ †                             152 KB — 37 signed artifacts from the eval league
+│
+└── data/d0/ †                        1.8 GB — local scratch tree
+    ├── binance/{BTCUSDT,ETHUSDT,SOLUSDT}/
+    └── kraken/archive/
+        └── Kraken_Trades_Full.zip.part00.partial    INCOMPLETE download
+```
+
+† = local artifact, deliberately untracked. Not a build output, not committed, and no
+claim about its contents is ever made from having the bytes in git.
+
+Crate dependency graph, the `.gitignore` rationale, and the "things that look missing but
+aren't" notes are in [`docs/STRUCTURE.md`](docs/STRUCTURE.md).
+
+---
+
 ## 0 · Run it on any OS (Windows · macOS · Linux)
 
 The whole control-plane infra is **Docker-based by design** — the same commands work
@@ -334,68 +554,6 @@ baseline · open the W0a gate document.
   `blocked`, never as green.
 
 ---
-
-## Repo map
-
-Directory structure as it actually exists on disk (verified 2026-11-04 by walking the
-tree, not copied from the plan). `*` = local artifact, deliberately **not** tracked.
-
-> **The complete annotated layout — every one of the 162 tracked files with its purpose,
-> the crate dependency graph, the untracked data trees and why `.gitignore` hides them —
-> is in [`docs/STRUCTURE.md`](docs/STRUCTURE.md).** This is the condensed view.
-
-```
-global-financial-trading-intelligence/
-├── README.md                     this document
-├── bootstrap/
-│   └── install.sh                one installer: rust build + migrations + --verify gates
-├── rust/                         hot-path kernel — one cargo workspace, 8 crates
-│   ├── rail/                     R1 ingest rail: wire protocol, NATS fanout
-│   ├── d0/                       D0 parquet store (read/write, no business logic)
-│   ├── ledger/                   D3 registry · D4 append-only ledger · kill cascade · recon
-│   │   └── src/bin/              ledger_init · ledger_fill · ledger_kill · ledger_check
-│   │                             ledger_recon · ledger_watchdog · ledger_appr
-│   ├── engine/                   E3 decision engine (cell spine)
-│   ├── featurize/                E1 features
-│   ├── evaluate/                 E2 signed-artifact evaluation
-│   ├── govern/                   E5 deterministic governor (Allow/Deny authority)
-│   └── exec/                     E6 execution state — `Paper | Shadow` only, live absent
-├── python/                       the edge — seats and tooling, contracts across the wall
-│   ├── collect/                  collectors + tests: HL 1m/ticks, NSE, Kraken, Binance
-│   ├── train/                    research lane: walk_forward · metrics · features · validation
-│   ├── gates/                    every gate runner (W0b · W0c · W1 · B1 · D1 · pilot E2E · status)
-│   ├── seats/                    seat-side integration helpers
-│   ├── research/                 reserved — empty (.gitkeep only)
-│   └── tools/                    reserved — empty (.gitkeep only)
-├── scripts/
-│   ├── hl_capture.sh             1m capture every 15 min (--merge + flock, then derive 1d)
-│   └── hl_trades.sh              tick recorder, 55-min sessions under flock
-├── compose/
-│   ├── docker-compose.yml        postgres · questdb · nats
-│   ├── sql/001-006               ordered migrations (idempotent; D3/D4/D5/W0b/W0c/W1)
-│   ├── .env.example              required local values (no secrets committed)
-│   └── README.md                 stack notes
-├── docs/
-│   ├── plans/                    the plan shelf (md + pdf + FINOS visual html)
-│   ├── decisions/                A0-DECISION-BASELINE.md — the authoritative baseline
-│   ├── gates/                    evidence: W0a · W0b · W0c · W1 · B1 · P1-DATA · P2-DATA · PILOT-E2E
-│   └── img/                      rendered architecture pages
-├── .github/workflows/ci.yml      sql-idempotence · rust (fmt/clippy/test) · python (train+collect+lint)
-├── configs/                      reserved — empty (subject/schema config not yet authored)
-├── d0/*                          captured market data: parquet + tick segments (hashed by D3)
-├── d5/*                          artifacts written by the eval league
-└── data/d0/*                     local scratch data tree
-```
-
-Two boundaries the layout encodes: **language** (Rust kernel vs Python seats, contracts
-across) and **evidence** (`d0/` is where captured market data lives and it is
-untracked, as are the `d5/` artifacts and the `data/d0/` scratch tree — every claim
-about captured data is pinned by a D3 row holding a repo-relative path and sha256,
-never by having the bytes in git).
-
-Build starts at W0a. Plan sources: `docs/plans/FULL-SYSTEM-BLUEPRINT.md` (pinned build
-doc) · `FULL-SYSTEM-MASTER-PLAN.md` · `AGENT-FLEET-BLUEPRINT.md` ·
-`ENGINE-DATABASE-PLAN.md` · `LLM-FLEET-BLUEPRINT.md`.
 
 *No secrets in this repository (scanned at seed time). License: to be decided by the
 owner — unlicensed means all rights reserved.*
