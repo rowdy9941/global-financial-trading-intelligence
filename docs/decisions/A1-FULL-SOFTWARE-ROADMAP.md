@@ -28,10 +28,19 @@ Read this before quoting A0 §8 as the order of work.
 |---|---|---|
 | one repo, everything wired | **yes** | A0 §8 phase order already said platform → data → train |
 | "as one software" | **no** | A0 describes components and gates; it never says they must ship as one installable artifact |
-| installable on **any OS** | **no** | A0 §2 declares OS *tiers*, but only tier A (Linux) is built; CI is `os: [ubuntu-latest]` |
+| installable on **any OS** | **yes — `A0` §2** | A0 §2 defines tiers A/B/C with a testable rule: *"'Any OS' is never claimed beyond A/B/C above until each tier passes the clean-install gate twice in a row."* Only tier A is implemented; CI is `os: [ubuntu-latest]`. The **blueprint never mentions install or OS at all**, which is how this was missed while reading the wave table |
 | merge custom **and open-source** engines | **no** | the plans record adopt/port decisions (Nautilus, proton, brigade, ruflo) as **decision-only**; nothing was integrated |
 | tick-by-tick for all three pilots | **partial** | A0 §4 freezes the P1→P2→P3 order; P1 has ticks, P2/P3 are blocked (see §5) |
 | profits from day one | **no — contradicted** | A0 and the gates state no profitability guarantee; the current candidate is DSR 0.4894 and is refused |
+
+### Document vs. code drift this reconciliation exposed
+
+A0 §2 states that *"the installer ships with a `--tier` probe that refuses unsupported
+configurations loudly instead of half-installing."* `bootstrap/install.sh` has **no `--tier`
+argument** — only a comment on line 2 and an `echo "[1/5] prerequisite probe (tier check)"`.
+The promise is in the baseline, the implementation is not. That is exactly the class of gap §3
+tracks, and it is why the any-OS requirement read as "not saved": it was saved in A0, not in the
+blueprint, and the code never matched it.
 
 ### Corrections to claims made about this repo
 
@@ -56,7 +65,7 @@ Measured 2026-11-04. Eight gaps, each with its evidence.
 | 1 | **The engines are fixtures, not services.** `cell` and `e7` exit after a tick count; setting the count to 0 exits immediately instead of running forever | `engine/src/bin/cell.rs:110` `while ticks < ticks_want` · `engine/src/bin/e7.rs:42` `while got < want` |
 | 2 | **Nothing supervises anything.** No `restart:` policy on any service; the only always-on processes are three datastores, one tick recorder and two cron lines | `compose/docker-compose.yml` (3 services, no `restart:`) |
 | 3 | **No single entry point.** Nine ways to start things: `cargo run`, `uv run`, `docker compose`, `bootstrap/install.sh`, cron, ad-hoc `subprocess` from gates | repo-wide |
-| 4 | **No cross-OS install.** Installer is bash + Linux paths + `docker`/`cargo`/`uv`; no macOS or Windows branch anywhere | `bootstrap/install.sh:18` · `.github/workflows/ci.yml:13` |
+| 4 | **No cross-OS install.** Installer is bash + Linux paths + `docker`/`cargo`/`uv`; no macOS or Windows branch anywhere, and the `--tier` probe A0 §2 promises does not exist | `bootstrap/install.sh:18` · `.github/workflows/ci.yml:13` |
 | 5 | **Config is scattered.** Env lives in `compose/.env`, `w0b.LEDGER_ENV`, per-binary env vars, and cron | `python/gates/w0b_gates.py`, `compose/.env` |
 | 6 | **Only 2 of the 5 declared subject families exist.** No publisher for `signal.*`, `risk.*`, `seat.*` — the seats poll Postgres instead | literal subject strings in Rust: `market.spot.*`, `order.spot.*` |
 | 7 | **No health view.** Eight gates answer "is it built", nothing answers "is it running" | `python/gates/status.py` runs gates, not services |
