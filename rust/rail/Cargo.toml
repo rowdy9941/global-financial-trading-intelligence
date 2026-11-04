@@ -9,4 +9,13 @@ edition = "2024"
 # license check + a reason comment, per the adopt-vs-build contract.
 [dependencies]
 
+# One dependency, one reason (A2 §4 A-1): std has no signal API, and a service
+# that cannot handle SIGTERM cannot be stopped in order — `docker stop` would
+# always fall through to SIGKILL. `libc` was already in the lock via postgres.
+# It is Unix-only on purpose: tier A (Linux) and tier C (WSL2) are Unix, and
+# tier B services run in Docker on a Linux kernel. Non-Unix targets build
+# without it and get a documented no-op (see rt.rs module note).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]

@@ -382,13 +382,14 @@ def gate_engine():
 
     # ---- Phase B: open → allow → E6 intent → E7 signed fill → recon ----
     run(BIN / "ledger_kill", "resolve", "L4", "W0b-engine-open", env=e)
-    with open(SCRATCH / "w0b_e7_in.txt", "w") as gfh:
-        gfh.write("GO\n")
+    # A-1: E7 is a resident process, not a fixture. There is no "GO" handshake —
+    # its subscribe + ledger-connect are the readiness barrier, and stdin is
+    # /dev/null exactly as it will be under a container.
     e7log = open(SCRATCH / "w0b_e7.log", "w")
     p_e7 = subprocess.Popen([str(BIN / "e7")],
                             env=dict(e, E7_EXPECT="4", E7_SUBJECT="order.spot.>",
                                      LEDGER_SECRET_OWNER=secret),
-                            stdin=open(SCRATCH / "w0b_e7_in.txt"),
+                            stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=e7log, cwd=str(REPO))
     time.sleep(1.2)
     txtB = run_cell_phase("B", 200.00, 1774000000000000000)

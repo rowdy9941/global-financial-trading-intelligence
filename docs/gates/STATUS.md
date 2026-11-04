@@ -44,7 +44,7 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 | 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs |
 | 2 | **G-STORE** | `OK` | 6 migrations applied twice, no error · append-only · 10× restart · sign-recon · `d1_gates.py ALL` |
 | 3 | **G-RAIL** | `OK` | `cargo test -p rail` 9 passed · FANOUT **p99 1.61 ms vs 2.00 ms**, p50 310 µs, subs ready 54 ms, 20,000/20,000 rows |
-| 4 | **G-ENGINE** | `OK` | ENGINE · kill cascade · `cargo test -p exec` 11 passed |
+| 4 | **G-ENGINE** | `OK` | ENGINE · kill cascade · residency (`rt_gates.py` 5/5) · `cargo test -p exec` 11 passed |
 | 5 | **G-DATA** | `blocked` | capture green; D3 `BTC-USDC/1m` = 4,440 rows, **`BTC-USDC/1d` = 1,347 (native)**, `BTC-USDC/1d-derived` = 2, `BTC-USD/1d` = 1,346 — blocked only by the Kraken archive |
 | 6 | **G-RESEARCH** | `OK` | `w1_gates.py ALL` all cases true |
 | 7 | **G-PILOT-E2E** | `blocked` | fixture P1/P2/P3 green · real-data P1 green · P2/P3 await owner inputs |

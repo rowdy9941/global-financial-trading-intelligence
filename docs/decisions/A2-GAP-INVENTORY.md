@@ -266,7 +266,7 @@ cannot be resident before it can stop.
 
 ### Phase A — one installable software
 
-**A-1 · Runtime residency** *(unblocks everything else)*
+**A-1 · Runtime residency** *(unblocks everything else)* — **DONE 2026-11-04**
 1. `cell`: replace `while ticks < ticks_want` with a run-forever loop; `CELL_TICKS=0` must mean
    "unbounded", not "exit immediately"; add a `--once` flag for gates so existing fixtures keep
    working unchanged.
@@ -276,6 +276,15 @@ cannot be resident before it can stop.
 4. `wire.rs`: `set_read_timeout` (or a poll loop) so a blocked read can observe the shutdown flag.
 5. One JSON heartbeat line per service per N seconds: `{"svc","uptime_s","ticks","decisions","fills","kill","version"}`.
 6. Gate: `start → wait for heartbeat → SIGTERM → exit 0` for all three, repeated 3×.
+
+Delivered: items 1–6 plus one bug the transition exposed (a `cell` stopped before its
+first decision panicked at shutdown: percentile over an empty sample). Bounded gate
+semantics are unchanged, so **no `--once` flag was added** — the existing
+`CELL_TICKS=N` / `E7_EXPECT=N` envs already are the bounded mode, and a second way to say
+the same thing would be a third contract to keep in sync. Heartbeat fields deviate from
+item 5 on purpose (`kill` needs a DB round trip inside a liveness printer; see
+[RESIDENCY](../gates/RESIDENCY.md) §2). Fence: `python/gates/rt_gates.py`, part of
+`G-ENGINE`. Evidence: [RESIDENCY](../gates/RESIDENCY.md) §3.
 
 **A-2 · Runtime profile in Compose**
 7. Add `rail`, `cell`, `e7` as Compose services on a `runtime` profile with

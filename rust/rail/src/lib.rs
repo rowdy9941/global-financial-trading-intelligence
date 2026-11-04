@@ -4,9 +4,11 @@
 //! point of market data into the system (FULL-SYSTEM-BLUEPRINT §3.1: D1 has ONE
 //! writer, and it is this).
 //!
-//! std-only at this stage. No `unwrap`/`panic` in library paths.
+//! Near-std-only: `libc` (Unix) is present solely so `rt::install_signal_handlers`
+//! can exist — std has no signal API. No `unwrap`/`panic` in library paths.
 
 pub mod ilp;
+pub mod rt;
 pub mod wire;
 
 use std::time::{SystemTime, UNIX_EPOCH};

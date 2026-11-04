@@ -2,8 +2,14 @@
 //! E6 publish `order.spot.<SYM>` intents.
 //!
 //! Env: RAIL_NATS_URL · LEDGER_URL (kill-state source) · CELL_SUBJECT (default
-//! market.spot.NIFTY) · CELL_TICKS (exit after n) · CELL_DECIDE_EVERY (cadence)
-//! · CELL_MAX_QTY · KILL_REFRESH_MS (cache refresh; fail-closed on error).
+//! market.spot.NIFTY) · CELL_TICKS (stop after n; **0 = run forever**) ·
+//! CELL_DECIDE_EVERY (cadence) · CELL_MAX_QTY · KILL_REFRESH_MS (cache refresh;
+//! fail-closed on error) · HEARTBEAT_MS.
+//!
+//! Residency (A2 §4 A-1): with `CELL_TICKS=0` this is a service. The receive
+//! loop uses a 200 ms read timeout so it can observe SIGTERM, and prints one
+//! `HB {...}` line per heartbeat interval. `CELL_TICKS=N` keeps the exact
+//! gate semantics it always had (exit after N ticks) — the gates are unchanged.
 //!
 //! Kill semantics (blueprint §6/§9/§11): a synchronous first refresh happens
 //! BEFORE any tick; then a background thread keeps the cache alive. ANY refresh
@@ -12,6 +18,7 @@
 //! per-decision DB hit (µs-class E5 per §9).
 use engine::{Action, Featurizer, Verdict, govern, intent_payload};
 use exec::{RouteRefusal, Routed, Router, State};
+use rail::rt::{self, Heartbeat};
 use rail::wire::Nats;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -24,6 +31,9 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Receive poll interval. Also the worst-case SIGTERM latency.
+const RECV_TICK: Duration = Duration::from_millis(200);
+
 fn refresh_once(allowed: &AtomicBool, refreshed: &AtomicU64) {
     let ok = ledger::connect()
         .ok()
@@ -33,6 +43,12 @@ fn refresh_once(allowed: &AtomicBool, refreshed: &AtomicU64) {
 }
 
 fn main() {
+    rt::install_signal_handlers();
+    let hb = Heartbeat::start_v(
+        "cell",
+        env!("CARGO_PKG_VERSION"),
+        rt::heartbeat_interval_ms(),
+    );
     let nats_url =
         std::env::var("RAIL_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
     let subject = std::env::var("CELL_SUBJECT").unwrap_or_else(|_| "market.spot.NIFTY".into());
@@ -40,6 +56,9 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(200);
+    // 0 = run forever. Before A-1 this exited immediately, which is the exact
+    // opposite of what a service needs.
+    let unbounded = ticks_want == 0;
     let decide_every: u64 = std::env::var("CELL_DECIDE_EVERY")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -107,10 +126,24 @@ fn main() {
     let mut e12_ns: Vec<u64> = Vec::new();
     let t_start = Instant::now();
 
-    while ticks < ticks_want {
-        if let Err(e) = nats.next_message(&mut symsubj, &mut payload) {
-            eprintln!("cell: recv fail: {e}");
-            std::process::exit(2);
+    while {
+        if rt::shutdown_requested() {
+            false
+        } else if unbounded {
+            true
+        } else {
+            ticks < ticks_want
+        }
+    } {
+        match nats.next_message_timeout(&mut symsubj, &mut payload, Some(RECV_TICK)) {
+            Ok(true) => {}
+            // Idle tick: the receive timeout exists so SIGTERM is observed
+            // within RECV_TICK instead of after the next market print.
+            Ok(false) => continue,
+            Err(e) => {
+                eprintln!("cell: recv fail: {e}");
+                std::process::exit(2);
+            }
         }
         let text = String::from_utf8_lossy(&payload).to_string();
         let f: Vec<&str> = text.split_whitespace().collect();
@@ -121,6 +154,7 @@ fn main() {
             continue;
         };
         ticks += 1;
+        hb.bump_events();
         let Some(feat) = feats.push(px) else {
             continue;
         };
@@ -165,6 +199,7 @@ fn main() {
                             std::process::exit(3);
                         }
                         intents_published += 1;
+                        hb.bump_intents();
                         let side_s = if matches!(side, Action::Buy) {
                             "buy"
                         } else {
@@ -209,10 +244,21 @@ fn main() {
         println!("{line}");
         use std::io::Write as _;
         let _ = std::io::stdout().flush();
+        hb.bump_decisions();
         dec += 1;
     }
     e12_ns.sort_unstable();
-    let pick = |q: f64| e12_ns[((e12_ns.len() as f64) * q).min(e12_ns.len() as f64 - 1.0) as usize];
+    // A-1 bug: a resident cell stopped before its first decision has an EMPTY
+    // e12_ns. The old percentile expression evaluated `len - 1.0` on 0 and
+    // indexed element 0 of an empty slice — a panic (rc 101) at shutdown, i.e.
+    // exactly the "the service cannot stop cleanly" failure A-1 exists to fix.
+    let pick = |q: f64| -> u64 {
+        if e12_ns.is_empty() {
+            return 0;
+        }
+        let last = (e12_ns.len() - 1) as f64;
+        e12_ns[((e12_ns.len() as f64) * q).min(last) as usize]
+    };
     eprintln!(
         "LEDGER-CELL-SUMMARY {{\"ticks\":{ticks},\"warm_ticks\":{warm_ticks},\"decisions\":{dec},\"allows\":{allows},\"refuse_kill\":{refuse_kill},\"refuse_size\":{refuse_size},\"no_signal\":{no_signal},\"intents_published\":{intents_published},\"e6_duplicate_refused\":{e6_dupe},\"e6_inflight_refused\":{e6_cap},\"e12_p50\":{},\"e12_p99\":{},\"budget_ns\":1000000,\"wall_ms\":{}}}",
         pick(0.5),

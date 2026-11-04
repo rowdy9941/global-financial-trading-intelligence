@@ -245,16 +245,12 @@ def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
             raise RuntimeError(f"{pid}: fixture produced zero intents — gate cannot verify routing")
 
         w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
-        e7_in = SCRATCH / f"pilot_{pid}_e7_in.txt"
-        e7_in.write_text("GO\n")
-        with (
-            open(e7_in) as e7_stdin,
-            open(SCRATCH / f"pilot_{pid}_e7.log", "w") as e7log,
-        ):
+        # A-1: E7 is resident; no "GO" handshake exists any more.
+        with open(SCRATCH / f"pilot_{pid}_e7.log", "w") as e7log:
             p_e7 = _spawn(
                 [str(w0b.BIN / "e7")],
                 env=dict(e, E7_EXPECT=str(expected), E7_SUBJECT="order.spot.>"),
-                stdin=e7_stdin,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=e7log,
                 cwd=str(REPO),

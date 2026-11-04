@@ -104,24 +104,80 @@ impl Nats {
         subject_buf: &mut String,
         payload: &mut Vec<u8>,
     ) -> std::io::Result<()> {
+        match self.next_message_timeout(subject_buf, payload, None)? {
+            true => Ok(()),
+            // unreachable with timeout=None: fill_line only yields false when a
+            // timeout is set
+            false => Err(io_err("receive returned no message without a timeout")),
+        }
+    }
+
+    /// Like [`Nats::next_message`], but returns `Ok(false)` when `timeout`
+    /// elapses with no message. This is the shape a resident service needs: its
+    /// loop can observe a shutdown flag instead of parking forever in a blocking
+    /// read (A2 §4 A-1).
+    ///
+    /// Partial lines survive a timeout — the accumulator lives in `self.buf`, so
+    /// an MSG header split across TCP segments can never desync the stream.
+    pub fn next_message_timeout(
+        &mut self,
+        subject_buf: &mut String,
+        payload: &mut Vec<u8>,
+        timeout: Option<Duration>,
+    ) -> std::io::Result<bool> {
         loop {
             if let Some((s, p)) = self.pending.pop_front() {
                 subject_buf.clear();
                 subject_buf.push_str(&s);
                 *payload = p;
-                return Ok(());
+                return Ok(true);
             }
-            self.buf.clear();
-            self.reader.read_line(&mut self.buf)?;
-            if let Some(msgpart) = self.buf.strip_prefix("MSG ").map(|s| s.to_string()) {
-                let f: Vec<&str> = msgpart.split_whitespace().collect();
-                subject_buf.clear();
-                subject_buf.push_str(f[0]);
-                self.read_msg_body(&msgpart, payload)?;
-                return Ok(());
+            if !self.fill_line(timeout)? {
+                return Ok(false);
             }
-            if self.buf.starts_with("PING") {
+            let line = std::mem::take(&mut self.buf);
+            if line.starts_with("PING") {
                 self.writer.write_all(b"PONG\r\n")?;
+                continue;
+            }
+            if let Some(msgpart) = line.strip_prefix("MSG ") {
+                subject_buf.clear();
+                subject_buf.push_str(msgpart.split_whitespace().next().unwrap_or(""));
+                // The header already arrived; a stalled body means a dead link,
+                // so the body read blocks rather than half-timing-out.
+                self.reader.get_ref().set_read_timeout(None)?;
+                self.read_msg_body(msgpart, payload)?;
+                return Ok(true);
+            }
+            // INFO / HMSG / -ERR: ignored, as in the pre-A-1 loop.
+        }
+    }
+
+    /// Read until `self.buf` holds one complete (`\n`-terminated) line.
+    /// `Ok(false)` = timeout before a newline; partial bytes are kept in `buf`.
+    fn fill_line(&mut self, timeout: Option<Duration>) -> std::io::Result<bool> {
+        self.reader.get_ref().set_read_timeout(timeout)?;
+        loop {
+            if self.buf.ends_with('\n') {
+                return Ok(true);
+            }
+            let mut chunk = String::new();
+            let r = self.reader.read_line(&mut chunk);
+            // Append BEFORE inspecting the error: a timed-out read may still have
+            // delivered bytes, and dropping them would desync the protocol.
+            if !chunk.is_empty() {
+                self.buf.push_str(&chunk);
+            }
+            match r {
+                Ok(0) => return Err(io_err("connection closed by peer")),
+                Ok(_) => {}
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    return Ok(false);
+                }
+                Err(e) => return Err(e),
             }
         }
     }
@@ -147,20 +203,21 @@ impl Nats {
     /// are parsed and queued into `pending` (FIFO), never dropped.
     fn wait_pong(&mut self) -> std::io::Result<()> {
         loop {
-            self.buf.clear();
-            self.reader.read_line(&mut self.buf)?;
-            if self.buf.starts_with("PONG") {
+            // An ack blocks: the PONG either arrives or the link is broken.
+            self.fill_line(None)?;
+            let line = std::mem::take(&mut self.buf);
+            if line.starts_with("PONG") {
                 return Ok(());
             }
-            if self.buf.starts_with("PING") {
+            if line.starts_with("PING") {
                 self.writer.write_all(b"PONG\r\n")?;
                 continue;
             }
-            if let Some(msgpart) = self.buf.strip_prefix("MSG ").map(|s| s.to_string()) {
-                let f: Vec<&str> = msgpart.split_whitespace().collect();
-                let subject = f[0].to_string();
+            if let Some(msgpart) = line.strip_prefix("MSG ") {
+                let subject = msgpart.split_whitespace().next().unwrap_or("").to_string();
                 let mut p = Vec::new();
-                self.read_msg_body(&msgpart, &mut p)?;
+                self.reader.get_ref().set_read_timeout(None)?;
+                self.read_msg_body(msgpart, &mut p)?;
                 self.pending.push_back((subject, p));
                 continue;
             }
@@ -229,6 +286,66 @@ mod tests {
         n.next_message(&mut subj, &mut pay).expect("recv");
         assert_eq!(subj, "market.spot.X");
         assert_eq!(pay.as_slice(), payload);
+        assert!(t.join().is_ok());
+    }
+
+    /// A-1 regression: a resident service must be able to ask "anything yet?" and
+    /// get `false` instead of blocking forever, and a MSG header split across TCP
+    /// segments by the timeout must not desync the stream.
+    #[test]
+    fn timeout_returns_idle_and_preserves_a_split_line() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = l.local_addr().expect("addr");
+        let t = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().expect("accept");
+            use std::io::{BufRead, Write as IoWrite};
+            let mut b = std::io::BufReader::new(s.try_clone().expect("clone"));
+            let mut line = String::new();
+            s.write_all(b"INFO {}\r\n").expect("greet");
+            b.read_line(&mut line).expect("connect");
+            b.read_line(&mut line).expect("connect ping");
+            s.write_all(b"PONG\r\n").expect("ack connect");
+            b.read_line(&mut line).expect("sub");
+            b.read_line(&mut line).expect("sub ping");
+            s.write_all(b"PONG\r\n").expect("ack sub");
+            // let the client's first read time out
+            std::thread::sleep(Duration::from_millis(120));
+            // then deliver a MSG header SPLIT across two writes
+            s.write_all(b"MSG market.spot.Y").expect("head part 1");
+            s.flush().expect("flush");
+            std::thread::sleep(Duration::from_millis(60));
+            s.write_all(b" g1 3\r\nabc\r\n")
+                .expect("head part 2 + body");
+            s.flush().expect("flush");
+            std::thread::sleep(Duration::from_millis(150));
+        });
+        let mut n = Nats::connect(&format!("nats://{addr}"), "t").expect("connect");
+        n.subscribe("market.spot.>").expect("sub");
+        let mut subj = String::new();
+        let mut pay = Vec::new();
+        let t0 = std::time::Instant::now();
+        assert!(
+            !n.next_message_timeout(&mut subj, &mut pay, Some(Duration::from_millis(50)))
+                .expect("idle read"),
+            "an idle socket must report idle, not a message"
+        );
+        assert!(
+            t0.elapsed() < Duration::from_millis(600),
+            "the idle read must return on its timeout"
+        );
+        let got = loop {
+            if n.next_message_timeout(&mut subj, &mut pay, Some(Duration::from_millis(80)))
+                .expect("second read")
+            {
+                break true;
+            }
+            if t0.elapsed() > Duration::from_secs(5) {
+                break false;
+            }
+        };
+        assert!(got, "the split MSG header was lost across the timeout");
+        assert_eq!(subj, "market.spot.Y");
+        assert_eq!(pay.as_slice(), b"abc");
         assert!(t.join().is_ok());
     }
 }

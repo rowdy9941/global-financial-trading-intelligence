@@ -381,11 +381,9 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
             raise RuntimeError("cell produced zero intents in calibration pass")
 
         w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
-        (SCRATCH / "w1_e7_in.txt").write_text("GO\n")
-        with (
-            open(SCRATCH / "w1_e7_in.txt") as e7_stdin,
-            open(SCRATCH / "w1_e7.log", "w") as e7log,
-        ):
+        # A-1: E7 is resident; there is no "GO" handshake to write. stdin is
+        # /dev/null, which is what it will be under a container.
+        with open(SCRATCH / "w1_e7.log", "w") as e7log:
             p_e7 = _spawn(
                 [str(w0b.BIN / "e7")],
                 env=dict(
@@ -394,7 +392,7 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
                     E7_SUBJECT="order.spot.>",
                     LEDGER_SECRET_OWNER=secret,
                 ),
-                stdin=e7_stdin,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=e7log,
                 cwd=str(REPO),

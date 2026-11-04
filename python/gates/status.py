@@ -522,6 +522,14 @@ def build(full: bool, install: bool) -> list[Gate]:
             "W0B-G2-KILL-DRILL",
         ),
         cargo_test("exec"),
+        # A-1: residency. cell/e7/rail must behave as long-lived processes —
+        # unbounded work stays up, idle means idle (not "waiting for a handshake
+        # file"), SIGTERM produces an ordered exit 0 with a drained queue, and the
+        # heartbeat repeats with an advancing clock. Before A-1 every one of those
+        # failed; this is the fence that keeps them fixed.
+        gate_runner("rt_gates.py")
+        if full
+        else Part(label="rt_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN),
     ]
 
     g5 = Gate(5, "G-DATA", "D3 verified + gap coverage + hash before any training")
