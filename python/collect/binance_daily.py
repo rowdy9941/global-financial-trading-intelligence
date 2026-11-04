@@ -50,7 +50,7 @@ def fetch_all(symbol: str, interval: str) -> list[list]:
                 time.sleep(2 ** attempt + 1)
         batch = json.loads(raw)
         if not isinstance(batch, list):
-            raise RuntimeError(f"bad payload: {str(batch)[:200]}")
+            raise TypeError(f"bad payload: {str(batch)[:200]}")
         if not batch:
             break
         if batch[0][0] <= (rows[-1][0] if rows else -1):

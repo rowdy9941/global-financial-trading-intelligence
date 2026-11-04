@@ -41,6 +41,11 @@ jobs:
       - name: collect lane
         working-directory: python/train
         run: uv run pytest -q ../collect/test_nse_fo_bhavcopy.py ../collect/test_register_b1_metadata.py
+      - name: collect lane (full suite, own env)
+        working-directory: python/collect
+        run: uv run pytest -q
+      - name: collect lint
+        run: uvx ruff check python/collect/ --output-format concise
 
   sql-idempotence:
     runs-on: ubuntu-latest
