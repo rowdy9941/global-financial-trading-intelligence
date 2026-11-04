@@ -340,6 +340,10 @@ baseline · open the W0a gate document.
 Directory structure as it actually exists on disk (verified 2026-11-04 by walking the
 tree, not copied from the plan). `*` = local artifact, deliberately **not** tracked.
 
+> **The complete annotated layout — every one of the 162 tracked files with its purpose,
+> the crate dependency graph, the untracked data trees and why `.gitignore` hides them —
+> is in [`docs/STRUCTURE.md`](docs/STRUCTURE.md).** This is the condensed view.
+
 ```
 global-financial-trading-intelligence/
 ├── README.md                     this document
