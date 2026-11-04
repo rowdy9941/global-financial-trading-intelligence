@@ -141,6 +141,45 @@ def gate_sign_recon():
     }))
     return ok
 
+def _await_subscriptions(subjects: set[str], timeout_s: float = 30.0) -> float:
+    """Block until every consumer has actually bound its subscription.
+
+    The fixed `time.sleep(1.0)` this replaces was a coin flip. If a rail_sub
+    binary takes longer than that second to bind (cold page cache, a competing
+    build, a busy 4-core box) every message published meanwhile is scored as if
+    it crossed the wire late: measured 2026-11-04, p99 1.07 s with all 20,000
+    rows delivered and p50 382 us — a startup race, not a rail regression.
+    Poll the NATS monitor endpoint that compose already publishes
+    (`nats -m 8222`, bound to 127.0.0.1) and publish only once the expected
+    subscriptions exist. Returns the seconds spent waiting.
+    """
+    deadline = time.monotonic() + timeout_s
+    t0 = time.monotonic()
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(
+                "http://127.0.0.1:8222/connz?subs=1", timeout=2.0
+            ) as r:
+                doc = json.loads(r.read())
+        except (OSError, ValueError):
+            time.sleep(0.02)
+            continue
+        bound = {
+            subj
+            for conn in (doc.get("connections") or [])
+            for subj in (conn.get("subscriptions_list") or [])
+            if subj in subjects
+        }
+        if bound >= subjects:
+            return time.monotonic() - t0
+        time.sleep(0.02)
+    missing = sorted(subjects - bound)
+    raise RuntimeError(
+        f"subscribers never bound within {timeout_s:.0f}s (missing {missing}); "
+        "publishing now would measure a startup race, not the wire"
+    )
+
+
 def gate_fanout():
     """W0b pin: R1→D2 fan-out → cell receive ≤ ~2 ms P99 (formal bench).
 
@@ -159,7 +198,7 @@ def gate_fanout():
         procs.append(subprocess.Popen(
             [str(BIN / "rail_sub"), subj, str(cnt), "nats://127.0.0.1:4222"],
             stdout=subprocess.DEVNULL, stderr=lg, cwd=str(REPO)))
-    time.sleep(1.0)  # subscriptions bound before publish
+    ready_s = _await_subscriptions({subj for subj, _ in specs})
     feed = SCRATCH / "w0b_fan_feed.tsv"
     with open(feed, "w") as f:
         for i in range(n_total):
@@ -188,6 +227,7 @@ def gate_fanout():
         cells.append({"subject": subj, **d, "expected": cnt, "ok": cell_ok})
     print("W0B-G5-FANOUT " + json.dumps({
         "rows_published": n_total, "pub_accepted": pub_ok,
+        "subs_ready_ms": round(ready_s * 1000),
         "cells": cells, "worst_p99_ns": worst_p99,
         "budget_ns": 2_000_000, "ok": all_ok,
     }))

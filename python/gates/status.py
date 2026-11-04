@@ -216,7 +216,8 @@ def explain(part: Part, marker: str) -> Part:
             f"{'all rows delivered' if delivered else 'ROWS MISSING'}; "
             f"p99 {payload.get('worst_p99_ns', 0) / 1e6:.2f} ms vs "
             f"{payload.get('budget_ns', 0) / 1e6:.2f} ms budget "
-            f"(p50 {min((c.get('p50', 0) for c in cells), default=0) / 1e3:.0f} µs); "
+            f"(p50 {min((c.get('p50', 0) for c in cells), default=0) / 1e3:.0f} µs; "
+            f"subs ready {payload.get('subs_ready_ms', '?')} ms); "
             f"{ambient()}"
         )
         return part
@@ -254,6 +255,7 @@ def from_payload(
         ok=ok,
         detail="true" if ok else f"{payload.get(key)!r}",
         argv=argv or [],
+        log=log,
     )
 
 
@@ -469,19 +471,31 @@ def build(full: bool, install: bool) -> list[Gate]:
     g3 = Gate(
         3, "G-RAIL", "ordering · duplicates · gap-in-lookahead · stale feed · fanout"
     )
-    g3.parts = [
-        cargo_test("rail"),
-        explain(
-            from_payload(
-                w0b.payload if w0b else None,
-                "FANOUT",
-                "w0b FANOUT (G5)",
-                enabled=full,
-                log=w0b.log if w0b else "",
-            ),
-            "W0B-G5-FANOUT",
-        ),
-    ]
+    g3.parts = [cargo_test("rail")]
+    if full:
+        # FANOUT is the one timing-sensitive pin in W0b: a 2 ms p99 budget. Inside
+        # `w0b_gates.py ALL` it runs immediately after the 10x Postgres restart cycle,
+        # and that costs it its margin — measured across aggregator runs p50 rose from
+        # 320-347 us (standalone) to 416-441 us, with p99 crossing to 2.36 ms, while
+        # all 20,000 rows were still delivered every time. That is ambient CPU/IO
+        # contention, not a rail regression, so it gets its own process after the
+        # restarts have settled, and the ambient load is recorded with the number.
+        fanout = gate_runner("w0b_gates.py", "FANOUT")
+        g3.parts.append(
+            explain(
+                from_payload(
+                    fanout.payload,
+                    "FANOUT",
+                    "w0b FANOUT (G5)",
+                    log=fanout.log,
+                ),
+                "W0B-G5-FANOUT",
+            )
+        )
+    else:
+        g3.parts.append(
+            Part(label="w0b FANOUT (G5)", ok=False, unrun=True, detail=NOT_RUN)
+        )
 
     g4 = Gate(
         4, "G-ENGINE", "E1–E7 contracts incl. kill cascade + reconcile-before-order"
@@ -515,6 +529,7 @@ def build(full: bool, install: bool) -> list[Gate]:
     for key in (
         "hyperliquid/BTC-USDC/1m",
         "hyperliquid/BTC-USDC/1d",
+        "hyperliquid/BTC-USDC/1d-derived",
         "hyperliquid/BTC-USD/1d",
     ):
         g5.parts.append(d3_verified(key))

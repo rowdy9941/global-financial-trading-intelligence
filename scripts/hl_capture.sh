@@ -77,7 +77,14 @@ uv run register_b1.py \
 # day-bar based and refuses intraday keys, so this is how P1 intraday
 # accumulation reaches it — with complete days only (partial edge days are
 # dropped by the resampler, never manufactured into a day bar).
-DAILY_REL="d0/hyperliquid/BTC-USDC/1d.parquet"
+#
+# The projection is registered under a `-derived` key, NOT `hyperliquid/BTC-USDC/1d`:
+# that key belongs to the venue-native full-history series (1,347 bars,
+# 2023-02-26 onward, captured by hand and verified field-for-field against the
+# legacy BTC-USD daily row). Before 2026-11-04 this line registered the 2-row
+# projection under the plain key, so every cron tick would have silently
+# overwritten the canonical row's identity.
+DAILY_REL="d0/hyperliquid/BTC-USDC/1d-derived.parquet"
 DAILY_SUMMARY="${TMPDIR:-/tmp}/gfti_hl_btc_usdc_1d.json"
 uv run resample_1m_to_1d.py \
     --d0-path "$REPO/$OUT_REL" --dataset-key "hyperliquid/${SYMBOL}/${INTERVAL}" \
@@ -86,7 +93,7 @@ uv run resample_1m_to_1d.py \
 
 uv run register_b1.py \
     --summary "$DAILY_SUMMARY" --d0-path "$DAILY_REL" \
-    --data-class hyperliquid \
+    --data-class hyperliquid --key-suffix=-derived \
     --pre-inception-note "derived 1d projection of the PIT 1m capture hyperliquid/BTC-USDC/1m — history begins when that capture began (public API retains only ~3 days of 1m), so nothing earlier exists in this lineage" \
     >/dev/null
 

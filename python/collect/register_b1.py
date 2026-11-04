@@ -183,6 +183,11 @@ def main():
         help="registry dataset_key prefix = <data-class>/<symbol>/<interval>",
     )
     a.add_argument(
+        "--key-suffix",
+        default="",
+        help="suffix appended to the dataset_key (<class>/<symbol>/<interval><suffix>).\n        A DERIVED projection registered beside its native sibling MUST use one\n        (e.g. -derived): the native full-history row owns the plain key, and a\n        projection that reused it would overwrite the canonical series on the\n        next scheduled run.",
+    )
+    a.add_argument(
         "--volume-available",
         choices=("true", "false"),
         default=None,
@@ -208,7 +213,11 @@ def main():
         volume_unit=args.volume_unit,
         schema_version=args.schema_version,
     )
-    key = f"{args.data_class}/{s['symbol']}/{s['interval']}"
+    key = f"{args.data_class}/{s['symbol']}/{s['interval']}{args.key_suffix}"
+    if not _IDENT.fullmatch(key):
+        raise SystemExit(
+            f"dataset_key failed identity regex with suffix {args.key_suffix!r}: {key!r}"
+        )
     d0 = Path(args.d0_path)
     sha = s["artifact"]["sha256"]
     if not _SHA.fullmatch(str(sha)):
@@ -283,13 +292,20 @@ def main():
                 'exchange-closed', 'justified',
                 '{pre_note}');
     """)
+    # Trailing edge: only a day that is STILL TRADING at registration time is a
+    # 'late' gap. A daily capture that returns closed bars only (the venue omits
+    # the open day) ends on yesterday, and flagging yesterday as "live day still
+    # trading" is a false statement in the gap ledger — measured 2026-11-04 on
+    # hyperliquid/BTC-USDC/1d, where last_day=2026-11-03 had closed 6 h earlier.
+    # The predicate keeps the row exactly where the original claim is true.
     psql(f"""
         INSERT INTO d3.gaps (dataset_key, window_from, window_to, kind,
                              status, justification)
-        VALUES ('{key}', '{s["last_day"]}T00:00:00Z',
-                '{s["last_day"]}T23:59:59Z', 'late', 'justified',
-                'live day still trading - closes at UTC midnight; rows beyond '
-                'capture are not PIT-real');
+        SELECT '{key}', '{s["last_day"]}T00:00:00Z',
+               '{s["last_day"]}T23:59:59Z', 'late', 'justified',
+               'live day still trading - closes at UTC midnight; rows beyond '
+               'capture are not PIT-real'
+        WHERE '{s["last_day"]}'::date = (now() AT TIME ZONE 'UTC')::date;
     """)
 
     # B-GATE: verified = TRUE only when no open-unjustified gaps block it

@@ -43,11 +43,11 @@ own docstring. `*` / `†` = local artifact, deliberately **not** tracked.
 
 | Measure | Value |
 |---|---|
-| Tracked files | **162** |
+| Tracked files | **163** |
 | Rust | 45 files · **28 `.rs`** · 3,589 lines |
-| Python | 48 files · **40 `.py`** · 11,953 lines |
+| Python | 48 files · **40 `.py`** · 12,029 lines |
 | SQL migrations | 6 files · 629 lines |
-| Docs | 53 files (32 plan docs · 10 diagrams · 8 gate records · 1 baseline · 2 specs) |
+| Docs | 54 files (32 plan docs · 10 diagrams · 8 gate records · 1 baseline · 2 specs · 1 structure note) |
 | Untracked data on disk | `d0/` 135 MB · `data/d0/` 1.8 GB · `d5/` 152 KB |
 
 Two artifacts are deliberately **not** counted above: `rust/target/` (build output) and
@@ -123,7 +123,7 @@ global-financial-trading-intelligence/
 │
 ├── python/                           the edge — off the decision path, contracts across the wall
 │   ├── collect/                      data acquisition + its tests (5,138 lines)
-│   │   ├── hyperliquid_daily.py    (503)  HL BTC-USD/1d perp candles (REST candleSnapshot)
+│   │   ├── hyperliquid_daily.py    (508)  HL BTC-USD/1d perp candles (REST candleSnapshot)
 │   │   ├── hl_trades_ws.py         (427)  HL trade-tick recorder — the ONLY route to genuine ticks
 │   │   ├── kraken_full_trades.py   (547)  Kraken public full-trade archive → verify → convert
 │   │   ├── nse_fo_bhavcopy.py      (376)  NSE F&O bhavcopy — NIFTY index-options history
@@ -132,13 +132,13 @@ global-financial-trading-intelligence/
 │   │   ├── derive_1m_from_trades.py(315)  ticks → 1m, then cross-checks the VENUE's own candle
 │   │   ├── resample_1m_to_1d.py    (215)  1m → 1d projection (complete days kept, edges dropped)
 │   │   ├── recover_trades_segments.py(159) salvage ticks after an ungraceful kill
-│   │   ├── register_b1.py          (334)  collector run → D3 (manifest + gap calendar)
+│   │   ├── register_b1.py          (350)  collector run → D3 (manifest + gap calendar)
 │   │   ├── pyproject.toml / uv.lock
 │   │   └── test_*.py                9 files, 1,700 lines — one per collector
 │   │
 │   ├── gates/                        every gate runner (3,509 lines)
-│   │   ├── status.py               (611)  **G-STATUS**: the 8 A0 gates → one verdict each
-│   │   ├── w0b_gates.py            (503)  W0b: append-only · kill drill · RESTART ×10 · recon ·
+│   │   ├── status.py               (626)  **G-STATUS**: the 8 A0 gates → one verdict each
+│   │   ├── w0b_gates.py            (543)  W0b: append-only · kill drill · RESTART ×10 · recon ·
 │   │   │                                  FANOUT (2 ms p99 budget) · WATCHDOG · ENGINE · approval
 │   │   ├── w1_gates.py             (491)  W1: DSR certification · crisis replay · cost cap
 │   │   ├── pilot_e2e.py            (378)  G-PILOT-E2E: fixture arm (P1/P2/P3) + --real P1 arm
@@ -222,11 +222,12 @@ global-financial-trading-intelligence/
 │
 ├── configs/                          RESERVED — empty (subject/schema config not yet authored)
 │
-├── d0/ †                             135 MB, 15 files — captured market data, hashed by D3
+├── d0/ †                             135 MB, 16 files — captured market data, hashed by D3
 │   ├── hyperliquid/
 │   │   ├── BTC-USDC/
 │   │   │   ├── 1m.parquet            the P1 intraday identity
-│   │   │   ├── 1d.parquet            DERIVED from 1m (complete days only)
+│   │   │   ├── 1d.parquet            VENUE-NATIVE full daily history (1,347 bars, 2023-02-26→)
+│   │   │   ├── 1d-derived.parquet    DERIVED from 1m (complete days only, 2 bars so far)
 │   │   │   ├── 1m-ticks-verified.parquet  bars whose maker ticks matched the venue
 │   │   │   └── trades/               tick segments, JSONL.gz, one per hour (+ .corrupt backups
 │   │   │                             kept from the 2026-11-03 corruption incident)

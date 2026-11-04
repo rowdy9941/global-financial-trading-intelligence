@@ -3,8 +3,13 @@
 
 Source: POST https://api.hyperliquid.xyz/info {"type":"candleSnapshot","req":
   {"coin":"BTC","interval":"1d","startTime":ms,"endTime":ms}} — public,
-key-free, up to 5000 candles per call; probe-verified full 1d history back to
-perp inception 2023-11-09 (docs/plans/DATA-PLAN-3SYMBOLS.md).
+key-free, up to 5000 candles per call. Measured 2026-11-04: full 1d history is
+served back to 2023-02-26, the first day with real trades. The plan's
+"perp inception 2023-11-09" (docs/plans/DATA-PLAN-3SYMBOLS.md) is NOT what the
+API says; fundingHistory is the only perp-specific clock available and its first
+BTC record is 2023-05-12, so the 2023-02-26..2023-05-11 segment is venue candle
+data whose funding regime cannot be confirmed from the API — see
+docs/gates/P1-DATA.md §3.1 before treating that segment as funded-perp history.
 
 NOTE: HL spot has no native BTC/USDC (only thin wrapped UBTC) — the perp is
 the real BTC venue on Hyperliquid; requester-pays S3 archives are out of

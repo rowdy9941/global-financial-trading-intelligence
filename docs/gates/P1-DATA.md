@@ -15,7 +15,7 @@ key-free. Probed with 1-hour windows at increasing age:
 | `5m` | 7 days | 30 days | ~1–4 weeks |
 | `15m` | 30 days | 90 days | months |
 | `1h` | 90 days | ~1 year | months |
-| `1d` | perp inception 2023-11-09 | — | full history |
+| `1d` | 2023-02-26 (first day with real trades) | — | full history |
 
 **Consequence:** tick/1m history beyond ~3 days cannot be backfilled from the
 public API. A PIT intraday series must be *captured going forward*
@@ -99,8 +99,9 @@ Result on the 4,320-bar capture: **2 complete days kept**, **2 edge days dropped
 (the capture window always cuts the first and last day). Re-run on 2026-11-04 the
 kept days are 11-02 and 11-03 — the pair advances with the window, which is exactly
 what §2.1 fixes.
-Registered as `hyperliquid/BTC-USDC/1d` with the lineage in `source`:
-`derived:resample-1m-to-1d:hyperliquid/BTC-USDC/1m:sha-<digest>`.
+Registered as `hyperliquid/BTC-USDC/1d-derived` with the lineage in `source`:
+`derived:resample-1m-to-1d:hyperliquid/BTC-USDC/1m:sha-<digest>`. (Before 2026-11-04
+this used the plain `1d` key; §3.1 moved it aside so the native series could own it.)
 
 ### Cross-check against the venue's own daily bar
 
@@ -115,6 +116,161 @@ days_compared 2  all_identical True
 
 Two independent paths agree to the last decimal, which is the strongest integrity
 signal available without venue files.
+
+## 3.1 · The native daily series now owns the canonical key (2026-11-04)
+
+§1 recorded that `1d` is served as full history, but the derived projection was the
+only daily series registered — 2 bars against a 300-bar walk-forward minimum, i.e.
+training was ~10 months away. The venue path was simply never used for a daily
+capture. Doing it changed one thing that mattered: what it returns before the
+contract existed.
+
+### The pre-onset trap
+
+`candleSnapshot coin=BTC interval=1d` from 2023-01-01 returns **1,404** bars, not
+the ~1,080 the plan's "perp inception 2023-11-09" would imply. That plan date is
+**not what the API says**, and the extra prefix is fabricated:
+
+```
+2023-01-01 O=16537.5 C=16610.3 V=0.0 n=0
+2023-01-02 O=16610.4 C=16666.0 V=0.0 n=0
+...   56 contiguous days, all V=0, all n=0   ...
+2023-02-25 (last zero-volume day)
+2023-02-26 O=       C=        V=10.70395 n=2514   <- first real bar
+```
+
+The venue backfills pre-launch days as **price-only reference bars**: no volume, no
+trades, contiguously from 2023-01-01. Training on them would be training on prices
+nobody traded. `hyperliquid_daily.py` already refuses to ship them — `venue_onset()`
+trims to the first bar with `n_trades > 0` and reports how many it dropped.
+
+### What is still not certain: the 2023-02-26 → 2023-05-11 segment
+
+The zero-volume prefix is settled. The next 75 bars are not. Funding is the only
+perp-specific clock the public API exposes, and it starts later than the candles do:
+
+```
+POST /info {"type":"fundingHistory","coin":"BTC","startTime":2023-01-01}
+  first record: 2023-05-12T00:00:00Z   (500-row pages; asking from 2023-02-01
+  also returns 2023-05-12 as the earliest, so there is no earlier funding)
+```
+
+A regime break sits on that date. Median trade count per day:
+
+| Month | mean volume (BTC) | median `n_trades` |
+|---|---|---|
+| 2023-02 | 10.6 | **0** (fabricated prefix) |
+| 2023-03 | 125.2 | **19,879** |
+| 2023-04 | 96.8 | **15,083** |
+| 2023-05 | 132.4 | **4,037** |
+| 2023-06 → 2023-10 | 18.5 – 204.3 | 2,235 – 2,694 |
+| 2023-11 → 2023-12 | 521 – 1,084 | 4,375 – 9,214 |
+
+Mar–Apr 2023 carries ~15–20k trades a day for ~100 BTC, i.e. ~0.006 BTC per print,
+then the count drops by ~4× exactly where funding begins and volume is flat. That
+is consistent with a different trading phase before funding existed, but the public
+API cannot distinguish "same contract, funding added later" from "a different
+market phase on the same coin name".
+
+**What this does and does not claim.** All 1,347 rows are exactly what the venue
+serves for coin `BTC`, hole-free, which is a verified statement. "Every row is a
+funded-perp day" is *not* verified for the 75 bars before 2023-05-12 (5.6%). That
+is recorded here as a declared limitation rather than resolved by assertion; if the
+strict reading is wanted, re-capturing from `--start-ms` 2023-05-12 yields 1,272
+bars, still far past the 300-bar minimum. The §1 "2023-11-09" figure came from
+`docs/plans/DATA-PLAN-3SYMBOLS.md` and is contradicted by the API on both counts.
+
+### Capture (real run)
+
+`--coin BTC --interval 1d --symbol BTC-USDC`
+
+| Field | Value |
+|---|---|
+| Rows | **1,347** |
+| Range | 2023-02-26 → 2026-11-03 (1,347 calendar days, `rows_minus_days` 0) |
+| Interior holes | `[]` |
+| Integrity | **PASS** |
+| Pre-onset rows excluded | **921** (the API returned 2,268 rows) |
+| sha256 | `9c2376fcf5e70944d15467bbd28adcbb22cde86b4c0fc6566c401a05e486bb00` |
+| Artifact | `d0/hyperliquid/BTC-USDC/1d.parquet` (untracked, like all of `d0/`) |
+
+Today's still-open bar is excluded by the collector, so `last_day` is the last
+*closed* day.
+
+### It is the same instrument as the legacy row
+
+The new series was compared against the already-registered
+`hyperliquid/BTC-USD/1d` on every overlapping day, across all six fields:
+
+```
+native rows 1347 | legacy rows 1346
+overlapping days: 1346
+days differing on open/high/low/close/volume/n_trades: 0
+native-only days: 1 (2026-11-03, fresher) | legacy-only days: 0
+```
+
+Both are coin `BTC`; the identity differs only in the quote label the registry
+carries, which is why the legacy row stays exactly as it is (A0 §4 forbids
+relabelling it) and the P1 identity gets its own registered artifact.
+
+### Key canonicalization
+
+`hyperliquid/BTC-USDC/1d` was already taken by the 2-row derived projection, and
+`register_b1.py` builds keys as `<class>/<symbol>/<interval>` with no way to
+disambiguate. Two changes, both required:
+
+1. `register_b1.py` gained `--key-suffix` (validated against the same identity
+   regex before interpolation), so a derived projection can sit beside its native
+   sibling.
+2. `hl_capture.sh` now writes `1d-derived.parquet` and registers with
+   `--key-suffix=-derived`. **This is the part that matters**: the cron runs every
+   15 minutes, and before the change it re-registered the 2-row projection under
+   the plain key — measured, the 12:00 run did it. Canonicalizing the registry
+   without fixing the script would have been undone within a quarter hour.
+
+The re-key was done in FK-safe order (insert the `-derived` row, move its 2 gap
+rows, delete the old row), because `d3.gaps.dataset_key → d3.datasets` is an
+immediate foreign key. Final state:
+
+| dataset_key | rows | verified |
+|---|---|---|
+| `hyperliquid/BTC-USDC/1d` | **1,347** | `t` |
+| `hyperliquid/BTC-USDC/1d-derived` | 2 | `t` |
+| `hyperliquid/BTC-USDC/1m` | 4,440 | `t` |
+
+Gaps on the canonical row: one justified pre-inception edge (2010-01-01 →
+2023-02-25, "venue onset 2023-02-26 … 921 rows excluded because they are not
+on-venue market data"), **zero open gaps**.
+
+A false row was removed while doing this: `register_b1.py` unconditionally wrote a
+`late` gap claiming the trailing day was "live day still trading". For a daily
+capture that returns only closed bars, the trailing day closed hours earlier — a
+factually wrong claim in the ledger. The insert is now conditional on
+`last_day = current UTC date`; the datasets where the claim is true (binance, the
+1m capture) are unaffected.
+
+### The training lane now consumes it
+
+```
+uv run python3 walk_forward.py --dataset hyperliquid/BTC-USDC/1d --folds 6 \
+    --out /tmp/opencode/p1_wf_native.json
+```
+
+| Field | Value |
+|---|---|
+| Folds | **4** (168-bar OOS each, 672-bar train, 2-bar embargo) — data-limited, not an error: `test_len = max(60, n // (folds+2))` |
+| Grid trials | 27 |
+| Pooled OOS Sharpe | 0.8145 |
+| **DSR (as reported)** | **0.4894** |
+| Cost flip | 8 bps |
+
+**This is not a promotion.** DSR 0.4894 does not clear the 0.95 promotion gate, and
+certification of that number is separately blocked: `metrics.DSR_CERTIFICATION_BLOCKER`
+records that no validated reference implementation/test vectors and no verified
+decorrelated trial count exist, so the value is reported as-is and can never be
+cited as certified. What this proves is narrower and still worth having: the daily
+lane runs end-to-end on the P1 identity and emits real statistics instead of
+refusing for want of bars.
 
 ## 4 · Tick capture (per-trade prints, WebSocket)
 
