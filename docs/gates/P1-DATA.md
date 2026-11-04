@@ -177,7 +177,49 @@ rewritten it down. `gzip -dc` was the cross-check that exposed it. Fixed to
 across two members (`len(member_a) > FEED`) and asserts equality with
 `gzip.decompress`.
 
-## 5 · Known limitations (explicit)
+## 5 · Tick → 1m bars, checked against the venue
+
+Aggregating ticks into 1m bars is only useful if the bars are *the market's* bars.
+`python/collect/derive_1m_from_trades.py` does the aggregation (de-duplicating by
+`tid` across **all** segments first), then compares every fully bracketed minute with
+the venue's own 1m `candleSnapshot` — an independent source, at least while the ~3-day
+retention holds.
+
+The comparison is unforgiving on purpose: all six fields (`open`, `high`, `low`,
+`close`, `volume`, `n_trades`) must agree exactly. Results:
+
+| Measurement | Result |
+|---|---|
+| Clean single-writer run, 140 s, both closed minutes | **2/2 identical** — `n=181, vol=15.10354` and `n=210, vol=22.47295` |
+| All four historical segments, minutes the venue also has | 45 compared → **27 exact, 18 mismatched** |
+| Worst historical minute (`04:18Z`) | ticks captured **23 %** of venue volume — 77 % of prints missing |
+
+So the recorder is **lossless while the socket stays up** (the clean run proves it),
+and the historical losses are capture interruptions: the repaired hour, session
+boundaries, and — measured, not assumed — any minute where a stream stalled inside a
+window. This is why `covered` in the tool means only *"one contiguous window brackets
+this minute"*, never *"every print is present"*; the venue comparison is what decides.
+
+Operational rule that follows (fail-closed, no judgement calls):
+
+> a tick-derived bar is published **only** when it matches the venue candle exactly on
+> all six fields; every other minute is excluded and listed by `--verified-only`.
+
+Run and result (parquet is local, not git-tracked):
+
+```
+uv run derive_1m_from_trades.py --cross-check --verified-only \
+    --out ../../d0/hyperliquid/BTC-USDC/1m-ticks-verified.parquet --summary /tmp/x.json
+→ prints 17,477 · compared 45 · exact 27 · kept 27 · excluded 18
+   written: 27 rows, sha256 ba1b67019524eab75132b3de04f01dc0ad7af200cbb4cdb6e2ba6e35e66def91
+```
+
+No D3 row is registered for this yet. 27 venue-verified minutes cannot support any
+statistic, and registering a dataset whose value is microstructure would invite exactly
+the over-claiming this repo gates against. Ticks stay raw evidence until there is enough
+of it to be worth a registered derivation.
+
+## 6 · Known limitations (explicit)
 
 1. **D3 gap calendar is day-granular.** A missing 1-minute bar inside a captured
    day is *not* representable as a gap row; only whole-day holes are. Current
@@ -190,20 +232,18 @@ across two members (`len(member_a) > FEED`) and asserts equality with
    accumulation reaches ~300 days. The DSR/WF gate stays the promotion
    authority (0.4894 on the legacy daily row, below the 0.95 gate).
 3. **Ticks are not a registered dataset.** They are raw append-only evidence
-   under `d0/` with no D3 row: there is no independent venue file to verify
-   against, and `verified=true` must never be claimed on a self-captured feed
-   alone. Ticks become training input only after a derivation that can be
-   cross-checked (see next steps).
+   under `d0/` with no D3 row: `verified=true` must never be claimed on a
+   self-captured feed alone. The only admissible derivation is the venue-checked
+   one in §5, and it currently yields 27 minutes — evidence, not a series.
 4. **Tick coverage is partial by construction.** Capture started 2026-11-03 and
    has the 13 h 48 m gap above; any statistic over ticks must state its coverage
    window, never assume the series is continuous.
 
-## 6 · Next steps
+## 7 · Next steps
 
 - let `scripts/hl_capture.sh` keep running (cron, every 15 min) so the 1m series
   and its derived 1d projection grow toward the 300-bar WF minimum;
-- let `scripts/hl_trades.sh` keep recording ticks; when enough volume exists,
-  derive 1m bars from ticks and **validate them against the venue's own 1m
-  candles** — two independent paths must agree before the derived bars can be
-  registered, exactly as the 1m→1d cross-check did;
+- let `scripts/hl_trades.sh` keep recording ticks; re-run the §5 venue check
+  periodically, because the 3-day candle retention means a minute that is not
+  verified promptly can never be verified at all;
 - only then extend the WF/eval gate to 1m bars on accumulated real data.
