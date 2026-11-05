@@ -6,12 +6,30 @@
 
 from __future__ import annotations
 
+import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
 
 _RUN_ID = uuid.uuid4().hex
+
+
+def config_env(repo: Path) -> dict:
+    """The environment a `docker compose` call needs, rendered from the ONE config
+    file (A2 §4 A-4).
+
+    Before this, each gate carried its own copy of the stack coordinates, so a port
+    moved in `compose/docker-compose.yml` left the gates probing the old one. Now
+    `configs/gfti.toml` decides and this helper is the only reader.
+    """
+    here = str(Path(repo) / "python" / "gfti")
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    # lazy on purpose: keeps gate startup fast and avoids a cycle
+    import gfti_config
+
+    return gfti_config.process_env(gfti_config.load())
 
 
 def scratch_dir() -> Path:

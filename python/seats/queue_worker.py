@@ -28,6 +28,19 @@ EXIT_OPERATIONAL = 3
 EXIT_IDENTITY = 4
 
 COMPOSE_DIR = Path(__file__).resolve().parents[2] / "compose"
+REPO = COMPOSE_DIR.parent
+
+
+def _compose_env() -> dict:
+    """A-4: `docker compose` interpolates `${VAR:?}`, so `exec` needs the rendered
+    config. Read it lazily through the one loader rather than duplicating values."""
+    sys.path.insert(0, str(REPO / "python" / "gfti"))
+    import gfti_config
+
+    return gfti_config.process_env(gfti_config.load())
+
+
+COMPOSE_ENV = _compose_env()
 
 HANDLERS: dict[str, Any] = {}
 _stats: dict[str, int] = {"claimed": 0, "succeeded": 0, "failed": 0, "lost": 0}
@@ -66,6 +79,7 @@ def psql(db: str, sql: str, what: str) -> str | None:
         result = subprocess.run(
             compose_psql(db, sql),
             cwd=COMPOSE_DIR,
+            env=COMPOSE_ENV,
             check=False,
             capture_output=True,
             text=True,

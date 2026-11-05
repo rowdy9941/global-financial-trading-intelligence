@@ -1,8 +1,12 @@
 name: gfti
 
 # W0a foundation stack (FULL-SYSTEM-BLUEPRINT §2.2) + the runtime profile (A2 §4 A-2).
-# Local-development credentials ONLY — production values come from env at deploy
-# time; these names/passwords are placeholders in a public repo by design.
+#
+# Configuration (A2 §4 A-4): every non-secret value below is `${VAR:?}` — required,
+# with no `:-` fallback. A fallback *is* a second source of truth, and the whole point
+# of `configs/gfti.toml` is that one file decides. `gfti` renders that file into the
+# environment of every `docker compose` call it makes, so `gfti up`, `install.sh` and
+# the gates cannot start different stacks. Secrets live in compose/.env only.
 #
 # Profiles:
 #   (default)  the three stores: postgres · questdb · nats
@@ -28,11 +32,14 @@ x-runtime-service: &runtime-service
       condition: service_healthy
   environment:
     # service-to-service names inside the compose network, never 127.0.0.1
-    LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
-    RAIL_NATS_URL: nats://nats:4222
-    # the dev owner secret; production reads an owner-side secret store (A0 §5)
-    LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
-    HEARTBEAT_MS: "1000"
+    LEDGER_URL: postgres://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/${POSTGRES_DB:?}
+    RAIL_NATS_URL: ${NATS_URL:?}
+    # The owner signing secret. Required with no default ON PURPOSE: a fallback
+    # here would put a usable credential in a public file (AGENTS.md §4).
+    # Development values come from compose/.env, production from an owner-side
+    # secret store (A0 §5).
+    LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:?set in .env (dev local, see .env.example)}
+    HEARTBEAT_MS: ${HEARTBEAT_MS:?}
   healthcheck:
     # "the beat is fresh", not "the pid exists" — see runtime.Dockerfile
     test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y \"$$HEARTBEAT_FILE\") )) -le 5"]
@@ -43,8 +50,8 @@ x-runtime-service: &runtime-service
   logging:
     driver: json-file
     options:
-      max-size: "10m"
-      max-file: "3"
+      max-size: ${LOG_MAX_SIZE:?}
+      max-file: ${LOG_MAX_FILE:?}
   # A2 §4 item 7 asks for per-service CPU pinning. Deliberately NOT hardcoded here:
   # Docker rejects a cpuset naming a core the host does not have, so a default of
   # `0-1` would make the stack fail to start on a 2-core laptop — the portability
@@ -56,15 +63,15 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: gfti
-      POSTGRES_USER: gfti_app
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:?}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gfti_app -d gfti"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:?} -d ${POSTGRES_DB:?}"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -73,8 +80,8 @@ services:
     image: questdb/questdb:7.4.2
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9000:9000"   # REST/ILP HTTP
-      - "127.0.0.1:9009:9009"   # ILP TCP
+      - "127.0.0.1:${QUESTDB_HTTP_PORT:?}:9000"   # REST/ILP HTTP
+      - "127.0.0.1:${QUESTDB_ILP_PORT:?}:9009"   # ILP TCP
     volumes:
       - qdbdata:/var/lib/questdb
     healthcheck:
@@ -90,8 +97,8 @@ services:
     restart: unless-stopped
     command: ["--name", "gfti-nats", "-js", "-m", "8222"]
     ports:
-      - "127.0.0.1:4222:4222"   # client
-      - "127.0.0.1:8222:8222"   # monitor
+      - "127.0.0.1:${NATS_PORT:?}:4222"   # client
+      - "127.0.0.1:${NATS_MONITOR_PORT:?}:8222"   # monitor
     healthcheck:
       test: ["CMD-SHELL", "timeout 3 wget -qO- http://127.0.0.1:8222/healthz?js_enabled_only=true || exit 1"]
       interval: 5s
@@ -108,42 +115,50 @@ services:
     # "up and waiting for a producer", not a working feed.
     stdin_open: true
     environment:
-      LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
-      RAIL_NATS_URL: nats://nats:4222
-      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
-      HEARTBEAT_MS: "1000"
+      LEDGER_URL: postgres://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      RAIL_NATS_URL: ${NATS_URL:?}
+      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:?set in .env (dev local, see .env.example)}
+      HEARTBEAT_MS: ${HEARTBEAT_MS:?}
       HEARTBEAT_FILE: /run/gfti/hb/rail.json
-      RAIL_TICK_MS: "200"
+      RAIL_TICK_MS: ${RAIL_TICK_MS:?}
+      # Publisher side of `[subjects].market`: one value in the config feeds the
+      # publisher here and the subscriber below (CELL_SUBJECT), so they cannot drift.
+      MARKET_PREFIX: ${MARKET_PREFIX:?}
 
   cell:
     <<: *runtime-service
     entrypoint: ["/usr/local/bin/cell"]
     environment:
-      LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
-      RAIL_NATS_URL: nats://nats:4222
-      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
-      HEARTBEAT_MS: "1000"
+      LEDGER_URL: postgres://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      RAIL_NATS_URL: ${NATS_URL:?}
+      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:?set in .env (dev local, see .env.example)}
+      HEARTBEAT_MS: ${HEARTBEAT_MS:?}
       HEARTBEAT_FILE: /run/gfti/hb/cell.json
       # 0 = unbounded (A-1). Anything else keeps the bounded gate semantics.
-      CELL_TICKS: "0"
-      CELL_SUBJECT: ${CELL_SUBJECT:-market.spot.NIFTY}
-      CELL_DECIDE_EVERY: "50"
-      CELL_MAX_QTY: "10"
-      KILL_REFRESH_MS: "250"
+      CELL_TICKS: ${CELL_TICKS:?}
+      CELL_SUBJECT: ${CELL_SUBJECT:?}
+      MARKET_PREFIX: ${MARKET_PREFIX:?}
+      # One value, two services: CELL_INTENT_PREFIX and E7_SUBJECT both derive from
+      # configs/gfti.toml [subjects].intent, so a publisher and its subscriber
+      # cannot drift apart (A2 item 15).
+      CELL_INTENT_PREFIX: ${CELL_INTENT_PREFIX:?}
+      CELL_DECIDE_EVERY: ${CELL_DECIDE_EVERY:?}
+      CELL_MAX_QTY: ${CELL_MAX_QTY:?}
+      KILL_REFRESH_MS: ${KILL_REFRESH_MS:?}
 
   e7:
     <<: *runtime-service
     entrypoint: ["/usr/local/bin/e7"]
     environment:
-      LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
-      RAIL_NATS_URL: nats://nats:4222
-      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
-      HEARTBEAT_MS: "1000"
+      LEDGER_URL: postgres://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:?}
+      RAIL_NATS_URL: ${NATS_URL:?}
+      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:?set in .env (dev local, see .env.example)}
+      HEARTBEAT_MS: ${HEARTBEAT_MS:?}
       HEARTBEAT_FILE: /run/gfti/hb/e7.json
-      E7_SUBJECT: ${E7_SUBJECT:-order.spot.>}
-      E7_EXPECT: "0"
+      E7_SUBJECT: ${E7_SUBJECT:?}
+      E7_EXPECT: ${E7_EXPECT:?}
       # a resident ledger cell refuses and continues; exiting 7 is the W0b drill pin
-      E7_REFUSE_EXIT: "0"
+      E7_REFUSE_EXIT: ${E7_REFUSE_EXIT:?}
 
 volumes:
   pgdata:

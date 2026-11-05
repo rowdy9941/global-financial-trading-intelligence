@@ -2,7 +2,8 @@
 //!
 //! Reads one whitespace-separated row per stdin line:
 //! `symbol ts_nanos price rights_class`
-//! Publishes stamped rows to `market.spot.<SYMBOL>` — fail-closed: if NATS is
+//! Publishes stamped rows to `<MARKET_PREFIX>.<SYMBOL>` (default `market.spot`,
+//! from `configs/gfti.toml [subjects].market`) — fail-closed: if NATS is
 //! unreachable the rail exits non-zero rather than running silently detached.
 //!
 //! A-1 residency: stdin is drained by a reader thread into a bounded channel so
@@ -22,6 +23,26 @@ use std::time::Duration;
 
 const DEFAULT_NATS: &str = "nats://127.0.0.1:4222";
 const DEFAULT_TICK_MS: u64 = 200;
+const DEFAULT_MARKET_PREFIX: &str = "market.spot";
+
+/// The publish namespace. One config value (`[subjects].market`) reaches both the
+/// publisher here and the subscriber (`CELL_SUBJECT`), so they cannot drift; the
+/// bench uses the same knob to publish into a namespace no live service consumes,
+/// which is what keeps its latency measurement free of a co-tenant's load.
+fn market_prefix() -> String {
+    match std::env::var("MARKET_PREFIX") {
+        Ok(v)
+            if !v.is_empty()
+                && v.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_')
+                && !v.starts_with('.')
+                && !v.ends_with('.') =>
+        {
+            v
+        }
+        _ => DEFAULT_MARKET_PREFIX.to_string(),
+    }
+}
 
 fn main() {
     let signals = rt::install_signal_handlers();
@@ -31,6 +52,7 @@ fn main() {
     }
 
     let nats_url = std::env::var("RAIL_NATS_URL").unwrap_or_else(|_| DEFAULT_NATS.to_string());
+    let prefix = market_prefix();
     let tick_ms: u64 = std::env::var("RAIL_TICK_MS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -128,7 +150,7 @@ fn main() {
                 // The publish ack (PONG) is the rail's proof the bus took the
                 // row; only after that do we report OK.
                 match nats.publish(
-                    &format!("market.spot.{}", r.symbol),
+                    &format!("{prefix}.{}", r.symbol),
                     format!("{} {} {}", r.ts_nanos, r.arrival_nanos, r.price).as_bytes(),
                 ) {
                     Ok(()) => {

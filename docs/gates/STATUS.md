@@ -41,7 +41,7 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 
 | # | Gate | Verdict | Evidence |
 |---|---|---|---|
-| 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs · `gfti` CLI contract 7/7 (`cli_gates.py`, A2 A-3) |
+| 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs · `gfti` CLI contract 7/7 (`cli_gates.py`, A2 A-3) · one-config contract 6/6 (`config_gates.py`, A2 A-4): `CONFIG` `RENDER` `PIVOT` `PARITY` `SECRETS` `DOCTOR` — a `:-` fallback or a bare `${VAR}` turns `RENDER` red · health view 3/3 (`health_gates.py`, A2 A-5): `FIELDS` `STALE` `HONEST` — `docker pause` on a live service turns the view red, names it and exits non-zero, then recovers on `unpause` |
 | 2 | **G-STORE** | `OK` | 6 migrations applied twice, no error · append-only · 10× restart · sign-recon · `d1_gates.py ALL` |
 | 3 | **G-RAIL** | `OK` | `cargo test -p rail` 9 passed · FANOUT **p99 1.61 ms vs 2.00 ms**, p50 310 µs, subs ready 54 ms, 20,000/20,000 rows |
 | 4 | **G-ENGINE** | `OK` | ENGINE · kill cascade · residency (`rt_gates.py` 6/6 incl. COMPOSE supervision) · `cargo test -p exec` 11 passed |

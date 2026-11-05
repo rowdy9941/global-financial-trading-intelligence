@@ -130,34 +130,10 @@ def load_registered_1m(pid: str, limit: int) -> tuple[list[float], dict]:
 
 
 def psql(sql: str) -> str:
-    """Read path over the compose Postgres (same flags as w0b.psql_exec:
-    -A -t unaligned/tuples-only so counts come back as one bare line)."""
-    r = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "-U",
-            "gfti_app",
-            "-d",
-            "gfti",
-            "-A",
-            "-t",
-            "-c",
-            sql,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-        cwd=str(w0b.COMPOSE),
-        check=False,
-    )
-    if r.returncode != 0:
-        raise RuntimeError(f"psql failed: {r.stderr.strip()}")
-    return r.stdout
+    """Read path over the compose Postgres. Delegates to w0b so the credentials and
+    the compose environment come from one place (A2 §4 A-4)."""
+    _ok, out = w0b.psql_exec(sql)
+    return out
 
 
 def _reap() -> None:
@@ -172,19 +148,29 @@ def _reap() -> None:
 
 def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
     p = PILOTS[pid]
-    symbol, subject = p["symbol"], p["subject"]
+    symbol = p["symbol"]
+    # Gate-owned PUBLISH namespace, same rule as the intent prefix below: the
+    # resident cell subscribes to market.spot.NIFTY, so P2's rows were being
+    # consumed by the live container as well as the pilot's own cell — measured
+    # 2026-11-05, P2 flaked only inside `ALL` and only once the stack was up.
+    # `rail` reads MARKET_PREFIX; `cell` reads CELL_SUBJECT, so both point here.
+    prefix = f"pilot.bench.{pid.lower()}"
+    subject = f"{prefix}.{symbol}"
     e, _secret = w0b.owner_env()
     e = dict(
         e,
-        RAIL_NATS_URL="nats://127.0.0.1:4222",
+        RAIL_NATS_URL=w0b.CFG_ENV.get("NATS_URL_HOST", "nats://127.0.0.1:4222"),
         KILL_REFRESH_MS="200",
         CELL_TICKS=str(len(closes)),
         CELL_DECIDE_EVERY=str(DECIDE_EVERY),
         CELL_SUBJECT=subject,
+        MARKET_PREFIX=prefix,
         # Gate-owned intent namespace (measured 2026-11-05): a resident e7 on
         # `order.spot.>` consumes these intents and signs fills with its own
-        # secret, so recon fails rc=9 on a healthy spine.
-        CELL_INTENT_PREFIX="order.pilot",
+        # secret, so recon fails rc=9 on a healthy spine. Per PILOT, not per
+        # suite: with one shared prefix a straggler e7 from P1 eats P2's intents
+        # (measured — P2 flaked only in `ALL`, never alone).
+        CELL_INTENT_PREFIX=f"order.pilot.{pid.lower()}",
     )
 
     w0b.run(
@@ -231,6 +217,7 @@ def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
                     capture_output=True,
                     timeout=180,
                     cwd=str(REPO),
+                    env=e,  # MARKET_PREFIX → the pilot's own namespace
                     check=False,
                 )
             cell.wait(timeout=90)
@@ -258,7 +245,11 @@ def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
         with open(SCRATCH / f"pilot_{pid}_e7.log", "w") as e7log:
             p_e7 = _spawn(
                 [str(w0b.BIN / "e7")],
-                env=dict(e, E7_EXPECT=str(expected), E7_SUBJECT="order.pilot.>"),
+                env=dict(
+                    e,
+                    E7_EXPECT=str(expected),
+                    E7_SUBJECT=f"order.pilot.{pid.lower()}.>",
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=e7log,

@@ -33,13 +33,20 @@ import argparse
 import json
 import os
 import platform
-import re
 import shutil
 import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
+
+try:  # run as a script: python/gfti and python are both plausible sys.path[0]
+    import gfti_config as gcfg
+except ImportError:  # imported as a package module
+    from . import gfti_config as gcfg
 
 VERSION = "0.1.0"
 
@@ -48,7 +55,7 @@ COMPOSE_DIR = REPO / "compose"
 COMPOSE_FILE = COMPOSE_DIR / "docker-compose.yml"
 GATES = REPO / "python" / "gates"
 RUNTIME_SERVICES = ("rail", "cell", "e7")
-SECRET_RE = re.compile(r"(SECRET|PASSWORD|PASSWD|TOKEN|_KEY|PRIVATE)", re.IGNORECASE)
+SECRET_RE = gcfg.SECRET_KEY_RE  # one definition, in gfti_config
 
 EXIT_OK, EXIT_FAIL, EXIT_ENV, EXIT_UNIMPL = 0, 1, 2, 3
 
@@ -98,7 +105,15 @@ def compose(*args, profile=True, timeout=None, capture=True) -> Result:
     if profile:
         argv += ["--profile", "runtime"]
     argv += [str(a) for a in args]
-    return sh(argv, cwd=COMPOSE_DIR, timeout=timeout, capture=capture)
+    # A-4: the config file, not compose defaults, supplies every non-secret value.
+    # If the file is broken, `up` must say so instead of starting a half-configured
+    # stack from interpolated fallbacks.
+    try:
+        env = gcfg.process_env(gcfg.load())
+    except gcfg.ConfigError as e:
+        print(f"gfti: {e}", file=sys.stderr)
+        return Result(argv, EXIT_ENV, "", str(e), 0.0)
+    return sh(argv, cwd=COMPOSE_DIR, timeout=timeout, capture=capture, env=env)
 
 
 def say(text=""):
@@ -131,11 +146,26 @@ def redacted(env: dict) -> dict:
 
 
 def ledger_url() -> str:
-    """Host-side DSN, built the same way the gates build it (compose/.env)."""
-    pw = dotenv(COMPOSE_DIR / ".env").get(
-        "POSTGRES_PASSWORD", "dev-only-local-placeholder"
+    """Host-side ledger DSN, from the one config file plus the secret file.
+
+    A-4: user, port and database are not repeated here — they come from
+    `configs/gfti.toml` through the same loader the gates use. The password is the
+    one value that may not live in the config, so it comes from `compose/.env`.
+    There is deliberately **no default password**: a defaulted credential is a
+    second source of truth that works on a developer box and silently points at
+    nothing anywhere else. Fail closed and say which value is missing.
+    """
+    env = gcfg.process_env(gcfg.load())
+    need = ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_PORT", "POSTGRES_DB")
+    missing = [k for k in need if not env.get(k)]
+    if missing:
+        raise gcfg.ConfigError(
+            f"ledger DSN needs {', '.join(missing)} — see `gfti doctor`"
+        )
+    return (
+        f"postgres://{env['POSTGRES_USER']}:{env['POSTGRES_PASSWORD']}"
+        f"@127.0.0.1:{env['POSTGRES_PORT']}/{env['POSTGRES_DB']}"
     )
-    return f"postgres://gfti_app:{pw}@127.0.0.1:5432/gfti"
 
 
 # ------------------------------------------------------------------- discovery
@@ -201,6 +231,199 @@ def heartbeat_age(name: str):
     return None if stamp is None else max(0, int(time.time()) - stamp)
 
 
+# A-5: a heartbeat is "stale" once it has missed more than three beats. One missed
+# beat is scheduling noise on a loaded box; three is a stopped loop.
+HB_BUDGET_FACTOR = 3
+
+
+def inspect_services(names) -> dict:
+    """state / paused / health / restart count for every container, in ONE call.
+
+    `docker inspect` is used rather than `docker exec` on purpose: a **paused**
+    container cannot be exec'd (the call blocks until its timeout), so an exec-based
+    view would time out on exactly the state a health view exists to report. A paused
+    process also still reports `state=running` with its last health verdict, which is
+    why `compose ps` alone can never see it.
+    """
+    names = [n for n in names if n]
+    if not names:
+        return {}
+    r = sh(
+        [
+            "docker",
+            "inspect",
+            *names,
+            "--format",
+            (
+                "{{.Name}}|{{.State.Status}}|{{.State.Paused}}"
+                "|{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}"
+                "|{{.RestartCount}}"
+            ),
+        ],
+        timeout=45,
+    )
+    out = {}
+    for line in r.out.splitlines():
+        parts = line.strip().split("|")
+        if len(parts) != 5:
+            continue
+        name, state, paused, health, restarts = parts
+        out[name.lstrip("/")] = {
+            "state": state.strip().lower(),
+            "paused": paused.strip().lower() == "true",
+            # an empty string means "this container declares no healthcheck"
+            "health": "" if health.strip() in ("", "-") else health.strip(),
+            "restart_count": int(restarts) if restarts.strip().isdigit() else 0,
+        }
+    return out
+
+
+# One round trip, one JSON object. `order by evt_id desc limit 1` is the kill state:
+# the append-only log's last row is the state now in force.
+LEDGER_SQL = (
+    "select json_build_object("
+    "'last_fill_epoch',(select extract(epoch from max(ts_est))::bigint from d4.fills),"
+    "'fills_60s',(select count(*) from d4.fills "
+    "where ts_est > now() - interval '60 seconds'),"
+    "'queued',(select count(*) from d3.llm_tasks where status = 'queued'),"
+    "'leased',(select count(*) from d3.llm_tasks where status = 'leased'),"
+    "'failed',(select count(*) from d3.llm_tasks where status = 'failed'),"
+    "'kill_engaged',(select engaged from d4.kill_events "
+    "order by evt_id desc limit 1),"
+    "'kill_level',(select level from d4.kill_events order by evt_id desc limit 1))"
+)
+
+
+def _ledger_facts() -> dict:
+    """d4 + queue + kill state. A failure is reported, never rendered as zeroes."""
+    try:
+        cfg = gcfg.load()
+        r = compose(
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-X",
+            "-A",
+            "-t",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            gcfg.value(cfg, "stores.postgres_user"),
+            "-d",
+            gcfg.value(cfg, "stores.postgres_db"),
+            "-c",
+            LEDGER_SQL,
+            timeout=60,
+        )
+    except gcfg.ConfigError as e:
+        return {"reason": f"config: {e}"}
+    if r.rc != 0:
+        line = (r.err or r.out).strip().splitlines()
+        return {"reason": f"psql rc={r.rc}: {(line[0] if line else 'no output')[:120]}"}
+    try:
+        doc = json.loads(r.out.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError):
+        return {"reason": f"unparseable psql output: {r.out.strip()[:120]}"}
+    return doc if isinstance(doc, dict) else {"reason": "psql returned no object"}
+
+
+def _questdb(sql: str, port: str):
+    url = f"http://127.0.0.1:{port}/exec?query=" + urllib.parse.quote_plus(sql)
+    with urllib.request.urlopen(url, timeout=4) as resp:
+        return json.load(resp)
+
+
+def _d1_facts(port) -> dict:
+    """D1 write rate. `ticks` does not exist until A-9, and a hardcoded 0 rows/s for
+    a store that holds nothing would be a fabricated number — so say why instead."""
+    try:
+        tables = _questdb("select table_name from tables()", port)
+        names = {row[0] for row in tables.get("dataset", [])}
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        return {
+            "live_table": None,
+            "rows": None,
+            "rows_per_s": None,
+            "reason": f"QuestDB unreachable: {e}",
+        }
+    if "ticks" not in names:
+        return {
+            "live_table": None,
+            "rows": None,
+            "rows_per_s": None,
+            "reason": (
+                "no live D1 table yet (A-9): QuestDB holds "
+                f"{len(names)} fixture table(s), no `ticks`"
+            ),
+        }
+    first = _questdb("select count() from ticks", port)["dataset"][0][0]
+    time.sleep(0.5)
+    second = _questdb("select count() from ticks", port)["dataset"][0][0]
+    return {
+        "live_table": "ticks",
+        "rows": second,
+        "rows_per_s": round((second - first) / 0.5, 1),
+        "reason": None,
+    }
+
+
+def _d2_facts(port) -> dict:
+    """JetStream depth. Zero streams is a real measurement (A-8 has not declared
+    them yet), not a missing value."""
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/jsz?streams=true", timeout=4
+        ) as resp:
+            doc = json.load(resp)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        return {"streams": None, "messages": None, "reason": f"NATS monitor: {e}"}
+    details = (doc.get("account_details") or [{}])[0].get("stream_detail") or []
+    return {
+        "streams": len(details),
+        "messages": sum(int(s.get("state", {}).get("messages", 0)) for s in details),
+        "reason": None,
+    }
+
+
+def _stores(cfg) -> dict:
+    env = gcfg.compose_env(cfg)
+    ledger = _ledger_facts()
+    if "reason" in ledger:
+        d4 = {"last_fill_epoch": None, "fills_60s": None, "reason": ledger["reason"]}
+        queue = {
+            "queued": None,
+            "leased": None,
+            "failed": None,
+            "reason": ledger["reason"],
+        }
+        kill = {"engaged": None, "level": None, "reason": ledger["reason"]}
+    else:
+        d4 = {
+            "last_fill_epoch": ledger.get("last_fill_epoch"),
+            "fills_60s": ledger.get("fills_60s"),
+            "reason": None,
+        }
+        queue = {
+            "queued": ledger.get("queued"),
+            "leased": ledger.get("leased"),
+            "failed": ledger.get("failed"),
+            "reason": None,
+        }
+        kill = {
+            "engaged": ledger.get("kill_engaged"),
+            "level": ledger.get("kill_level"),
+            "reason": None,
+        }
+    return {
+        "d4": d4,
+        "queue": queue,
+        "kill": kill,
+        "d1": _d1_facts(env.get("QUESTDB_HTTP_PORT", "9000")),
+        "d2": _d2_facts(env.get("NATS_MONITOR_PORT", "8222")),
+    }
+
+
 def port_open(port: int) -> bool:
     with socket.socket() as s:
         s.settimeout(0.4)
@@ -217,7 +440,11 @@ def cmd_doctor(args) -> int:
         checks.append({"name": name, "status": status, "detail": detail, "hard": hard})
 
     py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
-    add("python", "ok" if sys.version_info >= (3, 9) else "fail", py)
+    add(
+        "python",
+        "ok" if sys.version_info >= (3, 11) else "fail",
+        py + " (tomllib needs 3.11+)",
+    )
 
     tier, tier_detail = detect_tier()
     add("tier", "ok" if tier in ("A", "B", "C") else "warn", f"{tier} — {tier_detail}")
@@ -227,14 +454,37 @@ def cmd_doctor(args) -> int:
     else:
         add("compose_file", "ok", str(COMPOSE_FILE.relative_to(REPO)))
 
+    # A-4: one config file. Everything below reads it; a missing or malformed file
+    # is a hard fail because every later check would then be checking a guess.
+    cfg, config_error = None, None
+    try:
+        cfg = gcfg.load()
+        add(
+            "config_file",
+            "ok",
+            f"{gcfg.path_from_env().relative_to(REPO)} (tier {cfg['host']['tier']})",
+        )
+    except gcfg.ConfigError as e:
+        config_error = str(e)
+        add("config_file", "fail", str(e))
+
+    if cfg is not None:
+        want = cfg["host"]["tier"]
+        if want != "auto" and want != tier:
+            add("config_tier", "fail", f"host.tier={want} but this host is tier {tier}")
+        else:
+            add("config_tier", "ok", f"host.tier={want} (effective {tier})")
+
     env_file = COMPOSE_DIR / ".env"
     env = dotenv(env_file)
     if not env_file.is_file():
         add("env", "fail", "compose/.env missing — copy compose/.env.example")
-    elif not env.get("POSTGRES_PASSWORD"):
-        add("env", "fail", "compose/.env has no POSTGRES_PASSWORD")
     else:
-        add("env", "ok", f"{env_file.name}: {len(env)} key(s), secrets redacted")
+        problems = gcfg.secret_problems(cfg) if cfg is not None else []
+        if problems:
+            add("env", "fail", "; ".join(problems))
+        else:
+            add("env", "ok", f"{env_file.name}: {len(env)} secret(s), redacted")
 
     reachable, detail = docker_up()
     add("docker_daemon", "ok" if reachable else "fail", detail)
@@ -311,7 +561,10 @@ def cmd_doctor(args) -> int:
                 "tier": tier,
                 "strict": args.strict,
                 "checks": checks,
-                "config": redacted(env),
+                "config": gcfg.compose_env(cfg) if cfg is not None else {},
+                "secrets": redacted(env),
+                "config_source": str(gcfg.path_from_env()),
+                "config_error": config_error,
             }
         )
         return EXIT_OK if ok else EXIT_FAIL
@@ -322,10 +575,14 @@ def cmd_doctor(args) -> int:
             c["status"]
         ]
         say(f"  {mark} {c['name']:<18} {c['detail']}")
-    if env:
-        say("\neffective config (compose/.env, secrets redacted)")
-        for k, v in redacted(env).items():
+    if cfg is not None:
+        say(f"\neffective config — {gcfg.path_from_env().relative_to(REPO)}")
+        for k, v in gcfg.compose_env(cfg).items():
             say(f"  {k}={v}")
+        if env:
+            say("\nsecrets — compose/.env (redacted)")
+            for k, v in redacted(env).items():
+                say(f"  {k}={v}")
     say(
         f"\ndoctor: {'OK' if ok else 'FAILED'}"
         + (f" ({len(failed)} failed, {len(warned)} warned)" if not ok else "")
@@ -385,6 +642,7 @@ def cmd_down(args) -> int:
 
 
 def cmd_status(args) -> int:
+    """The health view (A2 A-5): every fact needed to decide, and no invented ones."""
     reachable, detail = docker_up()
     if not reachable:
         payload = {"ok": False, "error": "docker daemon unreachable", "detail": detail}
@@ -394,40 +652,126 @@ def cmd_status(args) -> int:
             say(f"gfti status: docker daemon unreachable — {detail}")
         return EXIT_ENV
 
+    try:
+        cfg = gcfg.load()
+    except gcfg.ConfigError as e:
+        say(f"gfti status: {e}")
+        return EXIT_ENV
+    hb_ms = int(gcfg.value(cfg, "runtime.heartbeat_ms"))
+    interval_s = round(hb_ms / 1000.0, 3)
+    budget_s = HB_BUDGET_FACTOR * interval_s
+
     rows = ps_rows()
+    names = [row.get("Name") or row.get("name") or "" for row in rows]
+    inspected = inspect_services(names)
+
     services = []
     for row in rows:
         name = row.get("Name") or row.get("name") or "?"
         svc = row.get("Service") or row.get("service") or name
-        state = (row.get("State") or row.get("state") or "").lower()
-        health = (row.get("Health") or row.get("health") or "").strip()
-        entry = {"service": svc, "name": name, "state": state, "health": health}
-        if svc in RUNTIME_SERVICES and state == "running":
-            entry["hb_age_s"] = heartbeat_age(name)
+        facts = inspected.get(name, {})
+        state = (
+            facts.get("state") or (row.get("State") or row.get("state") or "").lower()
+        )
+        health = facts.get("health", "")
+        paused = bool(facts.get("paused"))
+        # A paused container cannot be exec'd, so its heartbeat is unreadable rather
+        # than stale — but `paused` is already a down signal on its own.
+        hb = heartbeat_age(name) if svc in RUNTIME_SERVICES and not paused else None
+        stale_ok = hb is None or hb <= budget_s
+        up = (
+            state == "running" and not paused and stale_ok and health in ("", "healthy")
+        )
+        entry = {
+            "service": svc,
+            "name": name,
+            "state": state,
+            "health": health,
+            "up": up,
+            "paused": paused,
+            "restart_count": int(facts.get("restart_count", 0)),
+            "hb_age_s": hb,
+            "stale_ok": stale_ok,
+        }
+        if not up:
+            if paused:
+                entry["why"] = "paused"
+            elif state != "running":
+                entry["why"] = f"state={state}"
+            elif not stale_ok:
+                entry["why"] = f"heartbeat {hb}s > {budget_s:g}s budget"
+            elif health not in ("", "healthy"):
+                entry["why"] = f"health={health}"
         services.append(entry)
 
     present = {s["service"] for s in services}
     missing = [s for s in ("postgres", "questdb", "nats") if s not in present]
-    unhealthy = [s for s in services if s["health"] and s["health"] != "healthy"]
-    down = [s for s in services if s["state"] not in ("running",)]
-    ok = not (missing or unhealthy or down)
+    degraded = [s["service"] for s in services if not s["up"]]
+    stores = _stores(cfg)
+    ok = not missing and not degraded
 
     if args.json:
-        _json_out({"ok": ok, "services": services, "missing": missing})
+        _json_out(
+            {
+                "ok": ok,
+                "services": services,
+                "missing": missing,
+                "degraded": degraded,
+                "stores": stores,
+                "interval_s": interval_s,
+                "heartbeat_budget_s": round(budget_s, 3),
+            }
+        )
         return EXIT_OK if ok else EXIT_FAIL
 
     if not services:
         say("gfti status: no containers for this project — run `gfti up`")
         return EXIT_FAIL
-    say(f"{'SERVICE':<12}{'STATE':<12}{'HEALTH':<12}HEARTBEAT")
+    say(
+        f"{'SERVICE':<11}{'STATE':<10}{'HEALTH':<10}{'UP':<4}{'RST':<5}"
+        f"{'HB':<9}{'FILL60s':<9}{'QUEUE':<7}{'KILL':<6}{'STREAMS':<8}"
+    )
+    d4, queue, kill, d2 = stores["d4"], stores["queue"], stores["kill"], stores["d2"]
     for s in services:
         hb = s.get("hb_age_s")
-        hb_txt = f"{hb}s ago" if isinstance(hb, int) else "-"
-        say(f"{s['service']:<12}{s['state']:<12}{(s['health'] or '-'):<12}{hb_txt}")
+        hb_txt = f"{hb}s" if isinstance(hb, int) else "-"
+        fill = d4.get("fills_60s")
+        q = queue.get("queued")
+        kill_txt = "-"
+        if kill.get("engaged") is True:
+            kill_txt = f"ON/{kill.get('level') or '?'}"
+        elif kill.get("engaged") is False:
+            kill_txt = "off"
+        streams = d2.get("streams")
+        say(
+            f"{s['service']:<11}{s['state']:<10}{(s['health'] or '-'):<10}"
+            f"{'yes' if s['up'] else 'NO':<4}{s['restart_count']:<5}"
+            f"{hb_txt:<9}{('-' if fill is None else fill):<9}"
+            f"{('-' if q is None else q):<7}{kill_txt:<6}"
+            f"{('-' if streams is None else streams):<8}"
+        )
     if missing:
         say(f"missing: {', '.join(missing)}")
-    if unhealthy or down:
-        say("degraded — `gfti logs <service>` for the reason")
+    if degraded:
+        why = {s["service"]: s.get("why", "down") for s in services if not s["up"]}
+        say("degraded: " + ", ".join(f"{k} ({v})" for k, v in why.items()))
+        say("  `gfti logs <service>` for the reason")
+    d1 = stores["d1"]
+    last = d4.get("last_fill_epoch")
+    say(
+        "stores: d4 last_fill="
+        + (
+            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last))
+            if isinstance(last, int)
+            else "never"
+        )
+        + f" · queue q/l/f={queue.get('queued')}/{queue.get('leased')}/{queue.get('failed')}"
+        + f" · d2 streams={d2.get('streams')}"
+    )
+    if d1.get("reason"):
+        say(f"  d1: {d1['reason']}")
+    elif d1.get("live_table"):
+        say(f"  d1: {d1['live_table']} rows={d1['rows']} (+{d1['rows_per_s']}/s)")
     return EXIT_OK if ok else EXIT_FAIL
 
 
@@ -438,6 +782,70 @@ def cmd_logs(args) -> int:
     argv += args.service
     r = compose(*argv, capture=False)
     return r.rc
+
+
+# ----------------------------------------------------------------------- config
+
+
+def cmd_config(args) -> int:
+    """Print the effective configuration (A2 §4 A-4 items 13–15).
+
+    Three shapes, one source: human (default), `--json` for machines, `--sh` for a
+    POSIX shell to `eval`. `--sh` is how `install.sh` gets the *same* environment
+    `gfti up` uses, so the installer and the CLI cannot start different stacks.
+    """
+    try:
+        cfg = gcfg.load()
+    except gcfg.ConfigError as e:
+        say(f"gfti config: {e}")
+        return EXIT_ENV
+
+    env = gcfg.compose_env(cfg)
+    sec = gcfg.secrets()
+
+    if args.sh:
+        # export only what compose needs; secrets last so a config key can never
+        # shadow one. Never echo a value here that a caller did not ask for.
+        print(gcfg.sh_export({**env, **sec}), end="")
+        return EXIT_OK
+
+    problems = gcfg.secret_problems(cfg)
+    if args.json:
+        _json_out(
+            {
+                "ok": not problems,
+                "source": str(gcfg.path_from_env()),
+                "config": cfg,
+                "compose_env": env,
+                "secrets": redacted(sec),
+                "problems": problems,
+            }
+        )
+        return EXIT_OK if not problems else EXIT_FAIL
+
+    say(f"config — {gcfg.path_from_env()}")
+    for key in (
+        "POSTGRES_PORT",
+        "QUESTDB_HTTP_PORT",
+        "QUESTDB_ILP_PORT",
+        "NATS_PORT",
+        "NATS_URL",
+        "CELL_SUBJECT",
+        "CELL_INTENT_PREFIX",
+        "E7_SUBJECT",
+        "HEARTBEAT_MS",
+        "CELL_TICKS",
+        "E7_EXPECT",
+    ):
+        say(f"  {key}={env[key]}")
+    say(f"\nsecrets — {gcfg.ENV_FILE.name} (redacted)")
+    for k, v in redacted(sec).items():
+        say(f"  {k}={v}")
+    if problems:
+        for p in problems:
+            say(f"  FAIL {p}")
+    say(f"\nconfig: {'OK' if not problems else 'FAILED'} ({len(env)} non-secret keys)")
+    return EXIT_OK if not problems else EXIT_FAIL
 
 
 # ----------------------------------------------------------------------- smoke
@@ -611,8 +1019,12 @@ def cmd_kill(args) -> int:
         )
         return EXIT_ENV
     argv = [str(binary), args.action, args.level, args.reason]
-    env = dict(os.environ, LEDGER_URL=os.environ.get("LEDGER_URL") or ledger_url())
-    r = sh(argv, env=env, capture=False)
+    try:
+        url = os.environ.get("LEDGER_URL") or ledger_url()
+    except gcfg.ConfigError as e:
+        say(f"gfti kill: {e}")
+        return EXIT_ENV
+    r = sh(argv, env=dict(os.environ, LEDGER_URL=url), capture=False)
     return r.rc
 
 
@@ -768,6 +1180,13 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("smoke", help="fast end-to-end liveness proof")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_smoke)
+
+    s = sub.add_parser("config", help="print the effective configuration (A2 A-4)")
+    s.add_argument(
+        "--json", action="store_true", help="JSON, including the raw TOML tree"
+    )
+    s.add_argument("--sh", action="store_true", help="POSIX export lines, for eval")
+    s.set_defaults(fn=cmd_config)
 
     s = sub.add_parser("verify", help="run the full gate suite")
     s.add_argument("--install", action="store_true", help="include G-INSTALL (slow)")

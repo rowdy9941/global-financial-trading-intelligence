@@ -20,9 +20,20 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]  # repo root
+
+
+# A-4: compose interpolates `${VAR:?}`, so `exec` needs the rendered config, and
+# the psql coordinates come from the same file. One reader, no second copy.
+sys.path.insert(0, str(REPO / "python" / "gfti"))
+import gfti_config  # after the path insert, by necessity
+
+_CFG = gfti_config.load()
+COMPOSE_ENV = gfti_config.process_env(_CFG)
+_PSQL = gfti_config.psql_argv(_CFG)
 
 # Registry fields are interpolated into SQL by design (psql-only channel, no
 # DB driver dep). Every field is validated against a fixed shape BEFORE
@@ -129,16 +140,7 @@ def validated(s: dict) -> dict:
 def psql(sql: str) -> str:
     r = subprocess.run(
         [
-            "docker",
-            "compose",
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "-U",
-            "gfti_app",
-            "-d",
-            "gfti",
+            *_PSQL,
             "-c",
             sql,
         ],
@@ -147,6 +149,7 @@ def psql(sql: str) -> str:
         text=True,
         timeout=60,
         cwd=str(REPO / "compose"),
+        env=COMPOSE_ENV,
     )
     if r.returncode != 0:
         raise RuntimeError(f"psql failed: {r.stderr.strip()}")

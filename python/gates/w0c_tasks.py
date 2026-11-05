@@ -17,7 +17,15 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
 MIGRATION = COMPOSE / "sql" / "004_w0c_llm_tasks.sql"
-DB_NAME = "gfti"
+
+from _env import config_env
+
+# A-4: compose interpolates `${VAR:?}`, so every call carries the rendered config,
+# and the psql coordinates come from configs/gfti.toml instead of a copy here.
+CFG_ENV = config_env(REPO)
+PG_USER = CFG_ENV.get("POSTGRES_USER", "gfti_app")
+MAINT_DB = CFG_ENV.get("POSTGRES_DB", "gfti")
+DB_NAME = MAINT_DB
 
 
 def psql(sql: str) -> str:
@@ -36,7 +44,7 @@ def psql(sql: str) -> str:
             "-v",
             "ON_ERROR_STOP=1",
             "-U",
-            "gfti_app",
+            PG_USER,
             "-d",
             DB_NAME,
             "-c",
@@ -44,6 +52,7 @@ def psql(sql: str) -> str:
         ],
         check=False,
         cwd=COMPOSE,
+        env=CFG_ENV,
         capture_output=True,
         text=True,
         timeout=60,
@@ -71,7 +80,7 @@ def psql_rejects(sql: str, expected_error: str) -> bool:
             "-v",
             "ON_ERROR_STOP=1",
             "-U",
-            "gfti_app",
+            PG_USER,
             "-d",
             DB_NAME,
             "-c",
@@ -79,6 +88,7 @@ def psql_rejects(sql: str, expected_error: str) -> bool:
         ],
         check=False,
         cwd=COMPOSE,
+        env=CFG_ENV,
         capture_output=True,
         text=True,
         timeout=60,
@@ -101,12 +111,13 @@ def apply_migration() -> None:
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-U",
-                "gfti_app",
+                PG_USER,
                 "-d",
                 DB_NAME,
             ],
             check=False,
             cwd=COMPOSE,
+            env=CFG_ENV,
             input=migration_sql,
             capture_output=True,
             text=True,
@@ -176,13 +187,14 @@ def gate() -> dict[str, object]:
             "-v",
             "ON_ERROR_STOP=1",
             "-U",
-            "gfti_app",
+            PG_USER,
             "-d",
-            "gfti",
+            MAINT_DB,
             "-c",
             f'CREATE DATABASE "{DB_NAME}";',
         ],
         cwd=COMPOSE,
+        env=CFG_ENV,
         check=True,
         capture_output=True,
         text=True,
@@ -203,13 +215,14 @@ def gate() -> dict[str, object]:
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-U",
-                "gfti_app",
+                PG_USER,
                 "-d",
-                "gfti",
+                MAINT_DB,
                 "-c",
                 f'DROP DATABASE IF EXISTS "{DB_NAME}" WITH (FORCE);',
             ],
             cwd=COMPOSE,
+            env=CFG_ENV,
             check=True,
             capture_output=True,
             text=True,
@@ -288,13 +301,14 @@ def run_gate(run_id: str) -> dict[str, object]:
                 "-v",
                 "ON_ERROR_STOP=1",
                 "-U",
-                "gfti_app",
+                PG_USER,
                 "-d",
                 DB_NAME,
                 "-c",
                 held_claim_sql(worker, seconds),
             ],
             cwd=COMPOSE,
+            env=CFG_ENV,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

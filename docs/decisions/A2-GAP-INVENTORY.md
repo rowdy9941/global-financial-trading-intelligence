@@ -344,7 +344,7 @@ Evidence (verbatim):
 `SUMMARY {"DOCTOR": true, "HELP": true, "REFUSE": true, "SHIM": true, "SMOKE": true, "STATUS": true, "WF": true, "ok": true}`
 
 
-**A-4 · One config file**
+**A-4 · One config file** — **DONE 2026-11-05**
 13. `configs/gfti.toml` — services, ports, paths, DB DSNs, engine env, subject prefix, log level,
     tier. `.env` remains only for secrets and is generated/checked by `gfti doctor`.
 14. Every binary reads its env from the same generated `.env`; no per-binary ad-hoc defaults that
@@ -352,10 +352,97 @@ Evidence (verbatim):
 15. Gate: `gfti doctor` prints the effective config with secrets redacted; changing one value in
     the file changes behaviour of ≥2 services.
 
-**A-5 · Health view**
+Delivered: `configs/gfti.toml` as the **only** source for the 24 non-secret values;
+`python/gfti/gfti_config.py` (stdlib `tomllib`, no third-party dependency — same rule as the
+CLI); the `gfti config` verb (`--json` for machines, `--sh` for a POSIX shell to `eval`);
+`compose/docker-compose.yml` converted to `${VAR:?}` throughout with **no `:-` fallback
+anywhere**; `install.sh` step 2/7 `eval`s `config --sh`, so the installer and `gfti up` hand
+Compose the same environment by construction rather than by discipline; `python/gates/_env.py`
+gains `config_env(repo)`, which every gate now calls instead of carrying its own copy of the
+ports/credentials; and `python/gates/config_gates.py` (six cases, part of `G-INSTALL`):
+`CONFIG` (JSON is complete and names its source), `RENDER` (Compose renders **with** the
+environment and **refuses** without it), `PIVOT` (one value in the file moves ≥2 services),
+`PARITY` (`--sh` reproduces `--json` exactly), `SECRETS` (the secret file is a closed set),
+`DOCTOR` (the human view redacts what the JSON keeps).
+
+Five corrections, recorded because each one was a live defect rather than a design choice:
+
+* **A `:-` fallback is a second source of truth.** `RENDER`'s first version only proved that
+  *some* variable was required — with nine of them, re-introducing one fallback still left the
+  bare render failing, so the gate stayed green. It now scans the YAML for `:-` and for bare
+  `${NAME}` and fails on either. That scan immediately found a **credential with a default**:
+  `LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}` in four places. A
+  defaulted secret in a public file is a leak, not a convenience, so the key became required in
+  `[secrets]` (`optional = []`, and `declared_secrets` no longer treats an empty list as falsy).
+* **`--install` was dropping assertions.** `status.py` replaced `g1.parts` with the install run
+  instead of appending, so release certification quietly stopped running the CLI and config
+  contracts. Fixed; `--install` now adds.
+* **Every gate held a stale copy of the stack.** `rt_gates`, `w0b_gates`, `d1_gates`,
+  `pilot_e2e`, `status.py`, `register_b1.py`, `walk_forward.py`, `kraken_full_trades.py` and the
+  W0c seat worker each built their own `-U gfti_app -d gfti` / port literals. All now go through
+  `gfti_config.psql_argv()` + `process_env()`. Two real failures fell out of the conversion: the
+  W0c seat worker could not `exec` at all (compose refused to interpolate), and the D1 restore
+  drill was **restoring onto a live server** — 105 rows where 100 were expected — because its
+  un-enved `compose stop` silently failed. The drill now stops with the rendered env, archives
+  the volume from a throwaway container (a stopped container cannot be `docker exec`'d, and a
+  live one yields a torn `tar: file changed as we read it`), and restarts in a `finally`.
+* **`MARKET_PREFIX` was a config key nothing read.** Wiring it into `rail` fixed a second
+  subject-space collision of the A-3 kind: the fan-out bench published on `market.spot.*`, which
+  the resident `cell` also consumes, so the bench measured the live stack (worst p99 2.2–2.9 ms)
+  rather than the rail (1.6–1.8 ms with the stack stopped, same binaries). The bench now owns
+  `market.spot.bench.*`, and the same knob isolates each pilot's publish namespace — the cause of
+  P2 flaking only inside `ALL`. `MARKET_PREFIX` now reaches publisher (`rail`) and subscriber
+  (`CELL_SUBJECT`) from one TOML value, which `PIVOT` asserts.
+* **FANOUT's publish check could never match.** It looked for the text `accepted=20000`, but
+  `rail` reports that only inside `RAIL-SUMMARY {"accepted":20000,…}`; the gate was
+  unsatisfiable regardless of timing. It parses the JSON now. The 2 ms p99 contract is
+  unchanged, and the bench reports every attempt (best of up to three) with the host's CPU
+  count and load average, so a slow pass cannot hide behind a lucky one.
+
+Evidence (verbatim):
+`SUMMARY {"CONFIG": true, "DOCTOR": true, "PARITY": true, "PIVOT": true, "RENDER": true, "SECRETS": true, "ok": true}`
+· negative test: re-introducing one `:-` fallback turns `CONFIG-RENDER` red
+(`fallbacks=['POSTGRES_USER']`, rc=1) and restoring the file turns it green again.
+· parity: `gfti config --json` and `eval "$(gfti config --sh)"` agree on all 24 keys and both
+carry `POSTGRES_PASSWORD`.
+
+**A-5 · Health view** — **DONE 2026-11-05**
 16. `gfti status` — per service: up/down, restart count, last heartbeat age, last fill, kill state,
     queue depth, D1 write rate, NATS stream depth.
 17. Gate: stop `cell` with `docker pause` → `gfti status` goes red within one interval; resume → green.
+
+Delivered: `gfti status` (and its `--json` form) now carries all eight facts per service plus four
+store blocks (`d4`, `queue`, `kill`, `d1`, `d2`), one `docker inspect` per run, one psql round trip
+for the ledger, one QuestDB REST probe and one NATS `/jsz` probe. `python/gates/health_gates.py`
+wires it into `G-INSTALL` as a third part: `FIELDS` (every fact present and every `up` consistent
+with that row's own state/paused/heartbeat/health), `STALE` (`docker pause` on a live service → red,
+named, non-zero exit, then green again after `unpause`), `HONEST`.
+
+Three corrections, each a real defect this package forced into the open:
+
+* **`docker pause` is invisible to `compose ps`, and `docker exec` cannot see it either.** A paused
+  container still reports `state=running` with its last health verdict, so the existing view showed
+  green while the process did nothing; and `heartbeat_age()` reads the beat with `docker exec`, which
+  *hangs* on a paused container until its timeout. The view therefore reads state/paused/health/
+  restarts from `docker inspect` (which answers either way) and only execs for the heartbeat when the
+  container is not paused. `up` is derived once — `state == running and not paused and heartbeat
+  within 3× the interval and health in ("", healthy)` — and the gate re-derives it from the row to
+  prove the two agree.
+* **`gfti status` claimed `ok` from `state`/`health` alone, while `cli_gates` re-derived `ok` with its
+  own copy of that rule.** Two definitions of green is the same defect as two config files. Both now
+  read the single derived `up` boolean.
+* **D1 has no live table until A-9 and D2 has no declared streams until A-8.** Printing `0 rows/s`
+  for a store that holds nothing is a fabricated measurement, so `d1` reports `null` **with the
+  reason** (`no live D1 table yet (A-9): QuestDB holds 9 fixture table(s), no `ticks``), and `HONEST`
+  fails any null without a reason and any block that carries both a reason and values. When A-9 adds
+  `ticks`, the same code starts reporting rows and rows/s on its own.
+
+Evidence (verbatim):
+`SUMMARY {"FIELDS": true, "HONEST": true, "STALE": true, "ok": true}`
+· `HEALTH-STALE ok — paused gfti-rail-1: red=True named=True saw_paused=True saw_down=True exit_red=True recovered=True`
+· `HEALTH-HONEST ok — d1={'live_table': None, 'reason': 'no live D1 table yet (A-9): …', 'rows': None, 'rows_per_s': None} d2={'messages': 0, 'reason': None, 'streams': 0} problems=[]`
+· `OK 1 G-INSTALL: gfti CLI contract=true | one config file=true | health view=true`
+· human view while up: `cell running healthy yes 0 1s 7 0 off 0`.
 
 **A-6 · Cross-OS install**
 18. Implement the `--tier` probe A0 §2 already promises: A (Linux native) / B (macOS) / C (Windows

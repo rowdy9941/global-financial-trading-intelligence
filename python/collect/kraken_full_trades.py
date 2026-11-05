@@ -452,28 +452,20 @@ def register(summary_path: Path, d0_path: Path) -> None:
         raise SystemExit(f"D0 artifact not found: {d0_path}")
     sql = registration_sql(summary, d0_rel)
     repo = Path(__file__).resolve().parents[2]
+    import sys
+
+    sys.path.insert(0, str(repo / "python" / "gfti"))
+    import gfti_config
+
+    cfg = gfti_config.load()
     result = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "exec",
-            "-T",
-            "postgres",
-            "psql",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-U",
-            "gfti_app",
-            "-d",
-            "gfti",
-            "-c",
-            sql,
-        ],
+        [*gfti_config.psql_argv(cfg), "-v", "ON_ERROR_STOP=1", "-c", sql],
         check=False,
         cwd=repo / "compose",
         capture_output=True,
         text=True,
         timeout=120,
+        env=gfti_config.process_env(cfg),
     )
     if result.returncode:
         raise RuntimeError(f"D3 registration failed: {result.stderr.strip()}")

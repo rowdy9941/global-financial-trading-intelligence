@@ -39,6 +39,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 GATES = REPO / "python" / "gates"
+sys.path.insert(0, str(GATES))
+from _env import config_env  # needs GATES on sys.path first
+
 SUMMARY = re.compile(r"^SUMMARY (\{.*\})$", re.MULTILINE)
 W1 = re.compile(r"^W1-GATES (\{.*\})$", re.MULTILINE)
 PILOT = re.compile(r"^PILOT-E2E-SUITE (\{.*\})$", re.MULTILINE)
@@ -101,13 +104,19 @@ def _dump(label: str, text: str) -> str:
     return str(path)
 
 
-def run(argv: list[str], cwd: Path | None = None, label: str = "") -> tuple[int, str]:
+def run(
+    argv: list[str],
+    cwd: Path | None = None,
+    label: str = "",
+    env: dict | None = None,
+) -> tuple[int, str]:
     proc = subprocess.run(
         argv,
         cwd=str(cwd or REPO),
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     out = (proc.stdout or "") + (proc.stderr or "")
     if label:
@@ -116,7 +125,11 @@ def run(argv: list[str], cwd: Path | None = None, label: str = "") -> tuple[int,
 
 
 def run_stdin(
-    argv: list[str], data: bytes, cwd: Path | None = None, label: str = ""
+    argv: list[str],
+    data: bytes,
+    cwd: Path | None = None,
+    label: str = "",
+    env: dict | None = None,
 ) -> tuple[int, str]:
     proc = subprocess.run(
         argv,
@@ -124,6 +137,7 @@ def run_stdin(
         input=data,
         capture_output=True,
         check=False,
+        env=env,
     )
     out = proc.stdout.decode(errors="replace") + proc.stderr.decode(errors="replace")
     if label:
@@ -286,6 +300,13 @@ def cargo_test(crate: str) -> Part:
     )
 
 
+# A-4: compose interpolates `${VAR:?}`, so every compose call needs the rendered
+# environment. One reader, one value: configs/gfti.toml.
+COMPOSE_ENV = config_env(REPO)
+PG_USER = COMPOSE_ENV.get("POSTGRES_USER", "gfti_app")
+PG_DB = COMPOSE_ENV.get("POSTGRES_DB", "gfti")
+
+
 def migrations_twice() -> Part:
     """G-STORE requires the migrations to reapply; they must be idempotent.
 
@@ -302,9 +323,9 @@ def migrations_twice() -> Part:
         "postgres",
         "psql",
         "-U",
-        "gfti_app",
+        PG_USER,
         "-d",
-        "gfti",
+        PG_DB,
         "-v",
         "ON_ERROR_STOP=1",
     ]
@@ -312,7 +333,11 @@ def migrations_twice() -> Part:
     for i in (1, 2):
         for f in files:
             rc, out = run_stdin(
-                argv, f.read_bytes(), cwd=REPO / "compose", label=f"migrate{i}-{f.stem}"
+                argv,
+                f.read_bytes(),
+                cwd=REPO / "compose",
+                label=f"migrate{i}-{f.stem}",
+                env=COMPOSE_ENV,
             )
             if rc != 0:
                 ok, detail = (
@@ -336,15 +361,15 @@ def d3_verified(dataset_key: str) -> Part:
         "postgres",
         "psql",
         "-U",
-        "gfti_app",
+        PG_USER,
         "-d",
-        "gfti",
+        PG_DB,
         "-A",
         "-t",
         "-c",
         sql,
     ]
-    rc, out = run(argv, cwd=REPO / "compose")
+    rc, out = run(argv, cwd=REPO / "compose", env=COMPOSE_ENV)
     value = out.strip()
     return Part(
         label=f"D3 {dataset_key}",
@@ -444,11 +469,19 @@ def build(full: bool, install: bool) -> list[Gate]:
     # fresh clone can still get wrong: a front door that advertises a route it does
     # not have. It runs in every mode, before the optional slow halves.
     cli = gate_runner("cli_gates.py")
+    # A-4: one config file, and the proof that it is the source. Cheap (~4 s) and it
+    # is the only case that can catch a `:-` fallback creeping back into compose.
+    cfg = gate_runner("config_gates.py")
+    # A-5: the health view is the surface an operator actually reads, so it belongs
+    # in the gate that certifies the installed product rather than in a store gate.
+    health = gate_runner("health_gates.py")
     g1.parts = [
         from_payload(cli.payload, "ok", "gfti CLI contract (A2 A-3)", log=cli.log),
-        install_twice()
-        if install
-        else Part(label="install.sh --verify x2", ok=False, unrun=True, detail=OFF),
+        from_payload(cfg.payload, "ok", "one config file (A2 A-4)", log=cfg.log),
+        from_payload(health.payload, "ok", "health view (A2 A-5)", log=health.log),
+        # Placeholder only. The two clean installs are run at the END of build(),
+        # because they saturate the CPU and would poison FANOUT's 2 ms p99 budget.
+        Part(label="install.sh --verify x2", ok=False, unrun=True, detail=OFF),
     ]
 
     # one w0b invocation feeds both G-STORE and G-ENGINE: the runner takes ~3 min
@@ -591,7 +624,16 @@ def build(full: bool, install: bool) -> list[Gate]:
     # standalone and in a full run where they had not. Order the heavy work after the
     # timing-sensitive gate instead of blaming the rail for a load spike.
     if install:
-        g1.parts = [install_twice()]
+        # Run the two clean installs LAST (see above), then swap the placeholder for
+        # the result. Two wrong shapes preceded this one, both measured 2026-11-05:
+        # *replacing* the list dropped the CLI and config contracts from release
+        # certification, and *appending* ran install.sh four times while the filter
+        # deleted every part with that label — so `G-INSTALL` reported OK with only
+        # two parts and the clean-install claim carried no evidence at all.
+        done = install_twice()
+        g1.parts = [
+            done if (p.label == done.label and p.unrun) else p for p in g1.parts
+        ]
     return [g1, g2, g3, g4, g5, g6, g7, g8]
 
 

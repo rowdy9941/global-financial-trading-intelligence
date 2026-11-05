@@ -34,28 +34,30 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
-from _env import release_dir, scratch_dir
+from _env import config_env, release_dir, scratch_dir
 
 BIN = release_dir(REPO)
 SCRATCH = scratch_dir()
 POSIX = os.name == "posix"
 
 
+# A-4: stack coordinates come from configs/gfti.toml, never from a copy here.
+CFG_ENV = config_env(REPO)
+
+
 def _pg_url() -> str:
-    env = {}
-    for line in (COMPOSE / ".env").read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
-    pw = env.get("POSTGRES_PASSWORD", "dev-only-local-placeholder")
-    return f"postgres://gfti_app:{pw}@127.0.0.1:5432/gfti"
+    pw = CFG_ENV.get("POSTGRES_PASSWORD") or "dev-only-local-placeholder"
+    return (
+        f"postgres://{CFG_ENV.get('POSTGRES_USER', 'gfti_app')}:{pw}"
+        f"@127.0.0.1:{CFG_ENV.get('POSTGRES_PORT', '5432')}"
+        f"/{CFG_ENV.get('POSTGRES_DB', 'gfti')}"
+    )
 
 
 BASE_ENV = dict(
-    os.environ,
+    CFG_ENV,
     LEDGER_URL=_pg_url(),
-    RAIL_NATS_URL="nats://127.0.0.1:4222",
+    RAIL_NATS_URL=CFG_ENV.get("NATS_URL_HOST", "nats://127.0.0.1:4222"),
     LEDGER_SECRET_OWNER="dev-rt-" + os.urandom(12).hex(),
 )
 
@@ -248,7 +250,8 @@ def _nats_pub(subject: str, payload: str) -> None:
     the producer here. The protocol is three text lines.
     """
     body = payload.encode()
-    with socket.create_connection(("127.0.0.1", 4222), timeout=10) as s:
+    port = int(CFG_ENV.get("NATS_PORT", "4222"))
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
         s.sendall(
             b'CONNECT {"verbose":false,"pedantic":false,"protocol":1}\r\nPING\r\n'
         )
@@ -460,6 +463,7 @@ def _compose(*args: str, timeout: float = 600.0) -> subprocess.CompletedProcess[
         text=True,
         timeout=timeout,
         cwd=str(REPO),
+        env=CFG_ENV,  # A-4: same environment `gfti up` and install.sh use
         check=False,
     )
 

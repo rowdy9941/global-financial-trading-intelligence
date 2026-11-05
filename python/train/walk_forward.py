@@ -41,12 +41,24 @@ COST_BPS = 8.0
 EMBARGO_BARS = 2
 
 
+def _gcfg():
+    """A-4: coordinates and the compose environment come from configs/gfti.toml."""
+    import sys
+
+    sys.path.insert(0, str(REPO / "python" / "gfti"))
+    import gfti_config
+
+    return gfti_config
+
+
 def psql_query(sql: str) -> str:
+    gcfg = _gcfg()
+    cfg = gcfg.load()
     r = subprocess.run(
         ["docker", "compose", "-f", str(REPO / "compose" / "docker-compose.yml"),
-         "exec", "-T", "postgres", "psql", "-U", "gfti_app", "-d", "gfti",
-         "-At", "-F", "|", "-c", sql],
-        capture_output=True, text=True, timeout=120, check=False)
+         *gcfg.psql_argv(cfg)[2:], "-At", "-F", "|", "-c", sql],
+        capture_output=True, text=True, timeout=120, check=False,
+        env=gcfg.process_env(cfg))
     if r.returncode != 0:
         raise RuntimeError(f"psql failed: {r.stderr.strip()}")
     return r.stdout.strip()

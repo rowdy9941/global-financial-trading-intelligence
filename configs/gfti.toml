@@ -1,0 +1,73 @@
+# The single source of truth for everything that is NOT a secret (A2 §4 A-4).
+#
+# `compose/.env` holds credentials only, and the keys it may contain are declared
+# here under [secrets]. Every value below has at least one consumer, and the
+# consumer names are in the comments — a key nothing reads is a value nobody can
+# verify, so none are included.
+#
+# Change a value, then `gfti config` shows the derived compose environment;
+# `gfti up` hands exactly that environment to docker compose.
+
+version = 1
+
+[host]
+# auto = detect (A0 §2). A = Linux, B = macOS, C = Windows via WSL2.
+# `install.sh --tier=X` asserts instead of detecting.
+tier = "auto"
+
+[stores]
+# host ports (bound to 127.0.0.1 in compose). -> compose `ports:`
+postgres_port = 5432
+postgres_db = "gfti"
+postgres_user = "gfti_app"
+questdb_http_port = 9000
+questdb_ilp_port = 9009
+nats_port = 4222
+nats_monitor_port = 8222
+
+# -> rail / cell / e7 `RAIL_NATS_URL` (inside the compose network)
+nats_url = "nats://nats:4222"
+# -> `gfti doctor` connectivity probe and the gate harnesses (from the host)
+nats_url_host = "nats://127.0.0.1:4222"
+
+[subjects]
+# -> `CELL_SUBJECT` is `<market>.<runtime.cell.symbol>`
+market = "market.spot"
+# -> CELL_INTENT_PREFIX (cell publishes) AND E7_SUBJECT = "<intent>.>"
+#    One value, two services: a publisher and its subscriber cannot drift apart.
+intent = "order.spot"
+# -> KILL_REFRESH_MS on cell (how often the kill ladder is re-read)
+kill_refresh_ms = 250
+
+[runtime]
+# -> RAIL_TICK_MS (idle poll, also the worst-case SIGTERM latency for rail)
+railtick_ms = 200
+# -> HEARTBEAT_MS for all three services
+heartbeat_ms = 1000
+
+[runtime.cell]
+# 0 = run forever (A-1). Anything else keeps the bounded gate semantics.
+ticks = 0
+symbol = "NIFTY"
+decide_every = 50
+max_qty = 10
+
+[runtime.e7]
+# 0 = run forever (A-1).
+expect = 0
+# a resident ledger cell refuses and continues; exiting non-zero is the W0b drill pin
+refuse_exit = 0
+
+[log]
+# -> compose logging.options for every service
+max_size = "10m"
+max_file = 3
+
+[secrets]
+# Keys `compose/.env` may contain. Values live in .env only; the names live here so
+# `gfti doctor` can reject a non-secret that drifted into the secrets file.
+# Both are required: compose interpolates both with `${VAR:?}` and has no default
+# for either, because a defaulted credential in a public file is a leak, not a
+# convenience. compose/.env.example carries dev placeholders; nothing else may.
+required = ["POSTGRES_PASSWORD", "LEDGER_SECRET_OWNER"]
+optional = []

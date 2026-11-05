@@ -46,6 +46,7 @@ CORE_VERBS = (
     "doctor",
     "logs",
     "smoke",
+    "config",
     "verify",
     "ingest",
     "research",
@@ -141,12 +142,12 @@ def case_status() -> tuple[bool, str]:
         return ok, f"rc=2 (daemon unreachable, reported not crashed: {ok})"
     services = doc.get("services") or []
     expected = ("postgres", "questdb", "nats")
-    well_formed = all({"service", "state"} <= set(s) for s in services)
-    derived = (
-        not doc.get("missing")
-        and all(s.get("health", "") in ("", "healthy") for s in services)
-        and all(s.get("state") == "running" for s in services)
-    )
+    well_formed = all({"service", "state", "up"} <= set(s) for s in services)
+    # `up` is the single derived boolean the view publishes; the verdict must be
+    # exactly "nothing missing and everything up". health_gates.FIELDS separately
+    # proves each `up` agrees with that row's state/paused/heartbeat, so the two
+    # gates cannot disagree about what green means.
+    derived = not doc.get("missing") and all(s.get("up") is True for s in services)
     consistent = doc.get("ok") == derived
     ok = rc in (0, 1) and well_formed and consistent
     detail = f"rc={rc} services={len(services)} expected={list(expected)} ok={doc.get('ok')} consistent={consistent}"

@@ -25,6 +25,12 @@ COMPOSE = REPO / "compose"
 MIGRATION = COMPOSE / "sql" / "004_w0c_llm_tasks.sql"
 SEAT_ROLE = "d3_seat_runtime"
 
+from _env import config_env
+
+# A-4: one config file decides; compose needs its rendered environment to `exec`.
+CFG_ENV = config_env(REPO)
+ADMIN_USER = CFG_ENV.get("POSTGRES_USER", "gfti_app")
+
 
 def psql(db: str, user: str, sql: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -49,6 +55,7 @@ def psql(db: str, user: str, sql: str) -> subprocess.CompletedProcess[str]:
             sql,
         ],
         cwd=COMPOSE,
+        env=CFG_ENV,
         check=False,
         capture_output=True,
         text=True,
@@ -72,7 +79,7 @@ def seat_denied(db: str, sql: str, needle: str = "permission denied") -> bool:
 
 
 def admin_out(db: str, sql: str) -> str:
-    result = psql(db, "gfti_app", sql)
+    result = psql(db, ADMIN_USER, sql)
     if result.returncode:
         raise RuntimeError(f"admin psql failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -211,11 +218,12 @@ def run_gate() -> dict:
                     "-v",
                     "ON_ERROR_STOP=1",
                     "-U",
-                    "gfti_app",
+                    ADMIN_USER,
                     "-d",
                     db,
                 ],
                 cwd=COMPOSE,
+                env=CFG_ENV,
                 input=migration.read_text(encoding="utf-8"),
                 check=False,
                 capture_output=True,

@@ -13,6 +13,7 @@ gate doc pastes them unchanged.
 
 Usage: python3 python/gates/d1_gates.py A|B|C|D|E|ALL
 """
+
 import json
 import subprocess
 import sys
@@ -24,11 +25,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
-from _env import release_dir, scratch_dir
+from _env import config_env, release_dir, scratch_dir
 
 INGEST_BIN = release_dir(REPO) / "d1_ingest"
 SCRATCH = scratch_dir()
-REST = "http://127.0.0.1:9000/exec?query="
+CFG_ENV = config_env(REPO)
+REST = f"http://127.0.0.1:{CFG_ENV.get('QUESTDB_HTTP_PORT', '9000')}/exec?query="
 
 
 def q(sql):
@@ -67,7 +69,9 @@ def ingest(n, table):
     t0 = time.time()
     out = subprocess.run(
         [str(INGEST_BIN), str(n), table],
-        capture_output=True, text=True, timeout=600,
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     if out.returncode != 0:
         raise RuntimeError(f"d1_ingest failed: {out.stderr.strip()}")
@@ -82,8 +86,16 @@ def ensure_fresh(table):
 def compose_wait_healthy():
     for _ in range(60):
         r = subprocess.run(
-            ["docker", "inspect", "gfti-questdb-1", "--format", "{{.State.Health.Status}}"],
-            capture_output=True, text=True, timeout=30,
+            [
+                "docker",
+                "inspect",
+                "gfti-questdb-1",
+                "--format",
+                "{{.State.Health.Status}}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if r.stdout.strip() == "healthy":
             return
@@ -92,10 +104,22 @@ def compose_wait_healthy():
 
 
 def compose_restart():
-    subprocess.run(["docker", "compose", "stop", "questdb"], capture_output=True,
-                   cwd=str(COMPOSE), timeout=90)
-    subprocess.run(["docker", "compose", "start", "questdb"], capture_output=True,
-                   cwd=str(COMPOSE), timeout=90)
+    """One `restart`, not stop-then-start.
+
+    A-4: compose interpolates `${VAR:?}`, so the call must carry the file env.
+    Also: `stop` followed immediately by `start` is racy — measured 2026-11-05 the
+    `start` silently failed (check=False) and every later query hit "connection
+    refused" with no hint as to why. `restart` is a single primitive and its exit
+    status is now checked.
+    """
+    subprocess.run(
+        ["docker", "compose", "restart", "questdb"],
+        capture_output=True,
+        cwd=str(COMPOSE),
+        timeout=180,
+        env=CFG_ENV,
+        check=True,
+    )
     compose_wait_healthy()
 
 
@@ -107,12 +131,19 @@ def gate_a():
     meta, wall = ingest(n, tbl)
     got = stable_count(tbl)
     ok = got == n
-    print("GATE-A-BURST " + json.dumps({
-        "n_sent": n, "rows_server": got, "ok": ok,
-        "ingest_wall_s": round(wall, 2),
-        "client_ns_per_row": meta["ns_per_row"],
-        "rows_per_sec_eq": round(n / wall) if wall > 0 else 0,
-    }))
+    print(
+        "GATE-A-BURST "
+        + json.dumps(
+            {
+                "n_sent": n,
+                "rows_server": got,
+                "ok": ok,
+                "ingest_wall_s": round(wall, 2),
+                "client_ns_per_row": meta["ns_per_row"],
+                "rows_per_sec_eq": round(n / wall) if wall > 0 else 0,
+            }
+        )
+    )
     return ok
 
 
@@ -128,10 +159,18 @@ def gate_b():
     a = qd(f"select {cols} from {tables[0]} order by ts_nanos")
     b = qd(f"select {cols} from {tables[1]} order by ts_nanos")
     ok = a == b and len(a) == n
-    print("GATE-B-DETERMINISM " + json.dumps({
-        "rows": n, "rows_tab1": len(a), "rows_tab2": len(b),
-        "datasets_identical": a == b, "ok": ok,
-    }))
+    print(
+        "GATE-B-DETERMINISM "
+        + json.dumps(
+            {
+                "rows": n,
+                "rows_tab1": len(a),
+                "rows_tab2": len(b),
+                "datasets_identical": a == b,
+                "ok": ok,
+            }
+        )
+    )
     return ok
 
 
@@ -151,58 +190,108 @@ def gate_c():
     lats.sort()
     warm_p99 = lats[int(0.99 * len(lats))]
     ok = cold_ms < 3000 and warm_p99 < 500
-    print("GATE-C-PREWARM " + json.dumps({
-        "cold_first_query_ms": round(cold_ms, 1),
-        "warm_p50_ms": round(lats[len(lats) // 2], 1),
-        "warm_p99_ms": round(warm_p99, 1),
-        "cold_result_rows": cold[0][0] if cold else None,
-        "ok": ok,
-    }))
+    print(
+        "GATE-C-PREWARM "
+        + json.dumps(
+            {
+                "cold_first_query_ms": round(cold_ms, 1),
+                "warm_p50_ms": round(lats[len(lats) // 2], 1),
+                "warm_p99_ms": round(warm_p99, 1),
+                "cold_result_rows": cold[0][0] if cold else None,
+                "ok": ok,
+            }
+        )
+    )
     return ok
 
 
+def _qdb(verb: str) -> None:
+    """Stop/start the store with the rendered compose env (A-4) and CHECK the result.
+
+    An un-enved call fails interpolation silently; and a failed drill must never
+    leave the store down — measured 2026-11-05, one gate failure turned into
+    "connection refused" for every gate that ran after it.
+    """
+    subprocess.run(
+        ["docker", "compose", verb, "questdb"],
+        capture_output=True,
+        cwd=str(COMPOSE),
+        timeout=120,
+        env=CFG_ENV,
+        check=True,
+    )
+    if verb == "start":
+        compose_wait_healthy()
+
+
+def _qdb_container(argv: list[str], stdin=None, stdout=None) -> None:
+    """Run a command against the store's volume from a throwaway container.
+
+    The volume root IS the server's data directory (it mounts at /var/lib/questdb),
+    so archive members are relative to `/data`. A stopped container cannot be
+    `docker exec`'d, and archiving a live one yields a torn copy.
+    """
+    subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            *(["-i"] if stdin is not None else []),
+            "-v",
+            "gfti_qdbdata:/data",
+            "alpine",
+            *argv,
+        ],
+        stdin=stdin,
+        stdout=stdout,
+        capture_output=True if stdout is None else False,
+        timeout=300,
+        check=True,
+    )
+
+
 def gate_d():
-    """Restore drill: 100 rows → tar volume → +5 markers → restore → markers gone."""
+    """Restore drill: 100 rows → consistent backup → +5 markers → restore → 100."""
     tbl = "gate_d_restore"
     ensure_fresh(tbl)
     ingest(100, tbl)
     before = stable_count(tbl)
     bak = SCRATCH / "qdb-gate-d.tgz"
     bak.parent.mkdir(exist_ok=True)
-    with open(bak, "wb") as f:
-        subprocess.run(
-            ["docker", "exec", "gfti-questdb-1", "tar", "czf", "-", "-C", "/var/lib", "questdb"],
-            stdout=f, timeout=300,
-        )
+
+    _qdb("stop")
+    try:
+        with open(bak, "wb") as f:
+            _qdb_container(["tar", "czf", "-", "-C", "/data", "."], stdout=f)
+    finally:
+        _qdb("start")
     size = bak.stat().st_size
+
     ingest(5, tbl)  # post-backup markers must vanish on restore
     mid = stable_count(tbl)
-    # restore: stop → wipe volume root (true restore, not merge) → extract
-    # backup at volume root (tar members carry a questdb/ prefix → strip it) → start
-    subprocess.run(["docker", "compose", "stop", "questdb"], capture_output=True,
-                   cwd=str(COMPOSE), timeout=90)
-    subprocess.run(
-        ["docker", "run", "--rm", "-v", "gfti_qdbdata:/data", "alpine",
-         "sh", "-c", "rm -rf /data/* && ls /data | wc -l"],
-        capture_output=True, timeout=120,
-    )
-    with open(bak, "rb") as f:
-        subprocess.run(
-            ["docker", "run", "--rm", "-i", "-v", "gfti_qdbdata:/data", "alpine",
-             "tar", "xzf", "-", "--strip-components=1", "-C", "/data"],
-            stdin=f, capture_output=True, timeout=300,
-        )
-    subprocess.run(["docker", "compose", "start", "questdb"], capture_output=True,
-                   cwd=str(COMPOSE), timeout=90)
-    compose_wait_healthy()
+
+    _qdb("stop")
+    try:
+        _qdb_container(["sh", "-c", "rm -rf /data/* /data/.[!.]* 2>/dev/null; true"])
+        with open(bak, "rb") as f:
+            _qdb_container(["tar", "xzf", "-", "-C", "/data"], stdin=f)
+    finally:
+        _qdb("start")
     after = stable_count(tbl)
-    ok = (before == after and mid == before + 5 and after == 100)
-    print("GATE-D-RESTORE " + json.dumps({
-        "rows_backup": before, "rows_after_marker_ingest": mid,
-        "rows_after_restore": after, "backup_bytes": size,
-        "markers_reverted": mid == before + 5 and after == before,
-        "ok": ok,
-    }))
+    ok = before == after and mid == before + 5 and after == 100
+    print(
+        "GATE-D-RESTORE "
+        + json.dumps(
+            {
+                "rows_backup": before,
+                "rows_after_marker_ingest": mid,
+                "rows_after_restore": after,
+                "backup_bytes": size,
+                "markers_reverted": mid == before + 5 and after == before,
+                "ok": ok,
+            }
+        )
+    )
     return ok
 
 
@@ -223,11 +312,19 @@ def gate_e():
         per_cycle.append(round((time.time() - t0) * 1000))
     head = qd(f"select ts_nanos, price from {tbl} order by ts_nanos limit 5")
     ok = all_ok and len(head) == 5 and expected == 200
-    print("GATE-E-10XRESTART " + json.dumps({
-        "restarts": 10, "invariant_rows": expected,
-        "cycles_ms": per_cycle, "all_cycles_ok": all_ok,
-        "head_rows": head, "ok": ok,
-    }))
+    print(
+        "GATE-E-10XRESTART "
+        + json.dumps(
+            {
+                "restarts": 10,
+                "invariant_rows": expected,
+                "cycles_ms": per_cycle,
+                "all_cycles_ok": all_ok,
+                "head_rows": head,
+                "ok": ok,
+            }
+        )
+    )
     return ok
 
 

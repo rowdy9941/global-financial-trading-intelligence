@@ -309,7 +309,7 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
     e, secret = w0b.owner_env()
     e = dict(
         e,
-        RAIL_NATS_URL="nats://127.0.0.1:4222",
+        RAIL_NATS_URL=w0b.CFG_ENV.get("NATS_URL_HOST", "nats://127.0.0.1:4222"),
         KILL_REFRESH_MS="200",
         # cell exits after CELL_TICKS ticks — must equal the feed length or the
         # cell never exits and p.wait() times out (W0b pattern: 220-tick feed)

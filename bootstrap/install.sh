@@ -51,31 +51,44 @@ need() {
         || { echo "MISSING prerequisite: $1 — install it, then re-run."; exit 2; }
 }
 
-echo "[1/6] prerequisite probe (tier $TIER)"
+echo "[1/7] prerequisite probe (tier $TIER)"
 need docker
 need cargo
 need uv
 
-echo "[2/6] services (postgres/questdb/nats)"
+echo "[2/7] configuration (configs/gfti.toml → environment)"
+# A2 §4 A-4: one file owns every non-secret value, and the installer must hand
+# compose the SAME environment `gfti up` does. Evaluating `config --sh` is how
+# that stays true without a second copy of any default.
+#   GFTI_CONFIG  override the config path (gates use it to pivot one value)
+if ! CONFIG_SH="$(python3 "$REPO/python/gfti/cli.py" config --sh)"; then
+    echo "install.sh: configs/gfti.toml is invalid — run 'gfti doctor' for the reason"
+    exit 2
+fi
+eval "$CONFIG_SH"
+export POSTGRES_PORT POSTGRES_DB POSTGRES_USER NATS_URL CELL_SUBJECT E7_SUBJECT
+
+echo "[3/7] services (postgres/questdb/nats)"
 [ -f "$REPO/compose/.env" ] \
     || { echo "install.sh: compose/.env missing — cp compose/.env.example compose/.env"; exit 2; }
 docker compose -f "$COMPOSE_FILE" up -d --wait
 
-echo "[3/6] python lanes (uv sync)"
+echo "[4/7] python lanes (uv sync)"
 ( cd "$REPO/python/train" && uv sync )
 
-echo "[4/6] rust workspace build"
+echo "[5/7] rust workspace build"
 ( cd "$REPO/rust" && cargo build --release )
 
-echo "[5/6] migrations (001-006, idempotent)"
+echo "[6/7] migrations (001-006, idempotent)"
+# A-4: the psql coordinates come from the config rendered above, not from a copy.
 for f in 001_d3_d4_init 002_w0b_approval_flow 003_b1_data_plane \
          004_w0c_llm_tasks 005_w1_artifacts 006_d3_intraday_metadata; do
     cat "$REPO/compose/sql/$f.sql" | \
         docker compose -f "$COMPOSE_FILE" exec -T postgres \
-        psql -U gfti_app -d gfti -v ON_ERROR_STOP=1 >/dev/null
+        psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 >/dev/null
 done
 
-echo "[6/6] gfti entry point"
+echo "[7/7] gfti entry point"
 BIN="${XDG_BIN_HOME:-$HOME/.local/bin}"
 mkdir -p "$BIN"
 chmod +x "$REPO/bootstrap/gfti" 2>/dev/null || true
