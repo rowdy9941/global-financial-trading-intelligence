@@ -473,13 +473,21 @@ a Docker-backed clean install — that stays an owner action, stated in `docs/in
 `G-CI-OS` reads `gh run view --json jobs` and requires **green on ≥2 OS families on the exact
 release commit**, so the YAML alone cannot satisfy it.
 
-`python/gates/tier_gates.py` (4 cases, wired into `G-INSTALL`) is the gate. `POSIX` is the case that
+`python/gates/tier_gates.py` (5 cases, wired into `G-INSTALL`) is the gate. `POSIX` is the case that
 matters: besides `dash -n`, it copies *only* a shell and python into a temp PATH and runs the
 installer there — bash is absent, docker/cargo/uv are absent, and the run must still name every
 missing prerequisite and exit 2.
 
+The first `windows-tier-c` run **found a real product defect**, which is the point of adding a
+family rather than a comment: `gfti --help` died with `UnicodeEncodeError: 'charmap' codec can't
+encode character '\u2192'` because every console on Windows defaults to cp1252 and the CLI's help
+text is full of `→`. `_safe_console()` now sets `errors="replace"` on stdout/stderr at entry — the
+user's encoding (and `PYTHONIOENCODING`) stays authoritative, an unrepresentable glyph degrades to
+`?`, and a help screen can no longer abort a run. The new `ENCODING` case reproduces that crash on
+tier A by running four verbs under `PYTHONIOENCODING=cp1252` and `ascii`.
+
 Evidence (verbatim):
-`SUMMARY {"CIOS": true, "POSIX": true, "PROBE": true, "PS1": true, "ok": true}`
+`SUMMARY {"CIOS": true, "ENCODING": true, "POSIX": true, "PROBE": true, "PS1": true, "ok": true}`
 · `TIER-POSIX ok — posix=['sh', 'dash'] bare-PATH names all 3 missing, rc=2`
 · `TIER-PROBE ok — tier=A shim/doctor agree, --tier=B refused rc=2`
 · `TIER-PS1 ok — pwsh pwsh: tier A, config parity on 24 keys`

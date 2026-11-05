@@ -63,7 +63,7 @@ jobs:
         # POSIX parses under dash on this runner and the bare-PATH run proves the
         # installer names every missing tool at once; CIOS proves the workflow
         # still declares all three families.
-        run: python3 python/gates/tier_gates.py POSIX CIOS PS1 PROBE
+        run: python3 python/gates/tier_gates.py POSIX CIOS PS1 PROBE ENCODING
 
   ubuntu-sql:
     runs-on: ubuntu-latest
@@ -117,7 +117,7 @@ jobs:
         working-directory: python/train
         run: uv run pytest -q
       - name: tier probe is B and the installer is POSIX on macOS /bin/sh
-        run: python3 python/gates/tier_gates.py PROBE POSIX PS1
+        run: python3 python/gates/tier_gates.py PROBE POSIX PS1 ENCODING
 
   # Tier C — Windows. Native Windows is supported for the CLI only; services run
   # under WSL2 (docs/install-tiers.md). So this job exercises exactly the paths a
@@ -131,7 +131,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: tier is C and the PowerShell shim matches the CLI
-        run: python python/gates/tier_gates.py PROBE PS1
+        run: python python/gates/tier_gates.py PROBE PS1 ENCODING
       - name: CLI non-Docker verbs
         run: |
           python python/gfti/cli.py tier --json

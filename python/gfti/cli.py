@@ -1258,7 +1258,21 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _safe_console() -> None:
+    """A legacy Windows console (cp1252) cannot encode `→`, `·` or `—`, and the
+    CLI's help text is full of them — measured on windows-latest: `gfti --help`
+    died with UnicodeEncodeError instead of printing. Keep the user's encoding
+    (PYTHONIOENCODING stays authoritative) but never let a glyph abort a run:
+    an unrepresentable character degrades to `?`, the exit code stays honest."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main(argv=None) -> int:
+    _safe_console()
     argv = list(sys.argv[1:] if argv is None else argv)
     try:
         args = build_parser().parse_args(argv)

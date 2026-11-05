@@ -22,8 +22,11 @@ are one definition each. The defects this gate exists to catch are the quiet kin
   CIOS   `.github/workflows/ci.yml` declares the three OS families, and the macOS /
          Windows jobs reach the same gate file this is part of, so "green on ≥2 OS
          families" is a fact about the run rather than about a comment.
+  ENCODING  every non-Docker verb survives cp1252 and ascii. The CLI's help text
+         contains `→`/`·`/`—`; on windows-latest that aborted `gfti --help` with
+         UnicodeEncodeError. Reproduced here, on tier A, with PYTHONIOENCODING.
 
-Usage: python3 python/gates/tier_gates.py [PROBE|POSIX|PS1|CIOS|ALL]
+Usage: python3 python/gates/tier_gates.py [PROBE|POSIX|PS1|CIOS|ENCODING|ALL]
 
 Exit codes: 0 = every selected case passed (skips do not fail) · 1 = at least one failed.
 """
@@ -84,20 +87,26 @@ ALLOWED_TOOLS = (
 )
 
 
-def run(argv: list[str], timeout: int = 120, env: dict | None = None):
+def run(
+    argv: list[str], timeout: int = 120, env: dict | None = None, text: bool = True
+):
     return subprocess.run(
         argv,
         cwd=str(REPO),
         capture_output=True,
-        text=True,
+        text=text,
         check=False,
         timeout=timeout,
         env=env,
     )
 
 
-def out_of(p: subprocess.CompletedProcess[str]) -> str:
-    return (p.stdout or "") + (p.stderr or "")
+def out_of(p) -> str:
+    out = p.stdout or ""
+    err = p.stderr or ""
+    if isinstance(out, bytes):
+        out, err = out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+    return out + err
 
 
 def parse_json(text: str):
@@ -315,7 +324,42 @@ def case_cios():
     return ok, detail
 
 
-CASES = {"PROBE": case_probe, "POSIX": case_posix, "PS1": case_ps1, "CIOS": case_cios}
+def case_encoding():
+    """Tier C is a cp1252 console as often as not. The CLI's own text contains
+    `→`, `·` and `—`, so every non-Docker verb must survive an encoding that cannot
+    represent them. This is the check that reproduces the windows-latest crash on
+    a Linux box: `gfti --help` with PYTHONIOENCODING=cp1252 raised
+    UnicodeEncodeError before `_safe_console()` existed."""
+    problems = []
+    for enc in ("cp1252", "ascii"):
+        for args in (
+            ("--help",),
+            ("workflows",),
+            ("tier", "--json"),
+            ("config", "--json"),
+        ):
+            env = dict(os.environ, PYTHONIOENCODING=enc)
+            # The child legitimately emits cp1252 bytes here, so read them as bytes
+            # and only judge the exit code and that a usage line came out.
+            p = run([sys.executable, str(CLI), *args], env=env, text=False)
+            if p.returncode != 0:
+                problems.append(f"{enc} {' '.join(args)} rc={p.returncode}")
+            elif args == ("--help",) and b"usage" not in (p.stdout or b"").lower():
+                problems.append(f"{enc} --help printed no usage")
+    ok = not problems
+    return ok, (
+        "4 verbs x 2 encodings survive"
+        + (f" problems={problems[:3]}" if problems else "")
+    )
+
+
+CASES = {
+    "PROBE": case_probe,
+    "POSIX": case_posix,
+    "PS1": case_ps1,
+    "CIOS": case_cios,
+    "ENCODING": case_encoding,
+}
 
 
 def main() -> None:
