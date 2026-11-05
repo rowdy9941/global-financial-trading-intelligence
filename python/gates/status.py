@@ -440,10 +440,15 @@ def install_twice() -> Part:
 
 def build(full: bool, install: bool) -> list[Gate]:
     g1 = Gate(1, "G-INSTALL", "clean install twice on tier A")
+    # The CLI contract is cheap (~8 s, no DB, no Docker) and it is the one thing a
+    # fresh clone can still get wrong: a front door that advertises a route it does
+    # not have. It runs in every mode, before the optional slow halves.
+    cli = gate_runner("cli_gates.py")
     g1.parts = [
+        from_payload(cli.payload, "ok", "gfti CLI contract (A2 A-3)", log=cli.log),
         install_twice()
         if install
-        else Part(label="install.sh --verify x2", ok=False, unrun=True, detail=OFF)
+        else Part(label="install.sh --verify x2", ok=False, unrun=True, detail=OFF),
     ]
 
     # one w0b invocation feeds both G-STORE and G-ENGINE: the runner takes ~3 min

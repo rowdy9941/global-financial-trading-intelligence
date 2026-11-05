@@ -1,0 +1,31 @@
+#!/bin/sh
+# gfti — the entry point itself. POSIX sh, because an installer must run on a host
+# where nothing is installed yet (no bash on a minimal container, no python alias).
+#
+# `install.sh` symlinks this file into ~/.local/bin/gfti. The shim resolves its own
+# real path through any symlink chain, so the checkout can live anywhere and a
+# `git pull` updates the command.
+#
+# It finds a Python (3.9+, stdlib only — `python/gfti/cli.py` imports nothing else)
+# and hands over. No venv, no uv, no pip: those are what `gfti install` installs.
+
+set -eu
+
+self=$0
+while [ -L "$self" ]; do
+    target=$(readlink "$self")
+    case $target in
+        /*) self=$target ;;
+        *)  self=$(dirname "$self")/$target ;;
+    esac
+done
+repo=$(CDPATH= cd "$(dirname "$self")/.." && pwd)
+
+for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1; then
+        exec "$py" "$repo/python/gfti/cli.py" "$@"
+    fi
+done
+
+echo "gfti: no python3 on PATH — install Python 3.9+ to use the CLI" >&2
+exit 2
