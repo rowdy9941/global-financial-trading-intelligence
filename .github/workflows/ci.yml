@@ -138,8 +138,7 @@ jobs:
           python python/gfti/cli.py config --json > $null
           python python/gfti/cli.py workflows --json > $null
           python python/gfti/cli.py --help > $null
-      - name: native install refuses and names WSL2
-        shell: pwsh
-        run: |
-          python python/gfti/cli.py install
-          if ($LASTEXITCODE -ne 2) { throw "expected exit 2, got $LASTEXITCODE" }
+      # The native-install refusal (exit 2 + the WSL2 route) is asserted by
+      # `tier_gates.py PROBE`, whose Windows branch exists for exactly this. An
+      # ad-hoc `if ($LASTEXITCODE -ne 2)` here measured the pwsh wrapper, not the
+      # CLI, and failed while the CLI behaved correctly.
