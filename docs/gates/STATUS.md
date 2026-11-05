@@ -37,7 +37,8 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 
 ## Latest full run
 
-`status.py --full --install`, 2026-11-04, 4-core box.
+`status.py --full` on 2026-11-05, 4-core box. (The row-1 installer claim is from the
+2026-11-05 `--full --install` run — A-7 changed only the migration list, not the installer.)
 
 | # | Gate | Verdict | Evidence |
 |---|---|---|---|
