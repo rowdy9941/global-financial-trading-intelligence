@@ -331,13 +331,11 @@ def case_encoding():
     a Linux box: `gfti --help` with PYTHONIOENCODING=cp1252 raised
     UnicodeEncodeError before `_safe_console()` existed."""
     problems = []
+    # `config` is deliberately not in this list: its exit code depends on whether
+    # compose/.env exists (CI has no secrets file), so failing it would say nothing
+    # about encoding. These three verbs print the CLI's own text and nothing else.
     for enc in ("cp1252", "ascii"):
-        for args in (
-            ("--help",),
-            ("workflows",),
-            ("tier", "--json"),
-            ("config", "--json"),
-        ):
+        for args in (("--help",), ("workflows",), ("tier", "--json")):
             env = dict(os.environ, PYTHONIOENCODING=enc)
             # The child legitimately emits cp1252 bytes here, so read them as bytes
             # and only judge the exit code and that a usage line came out.
