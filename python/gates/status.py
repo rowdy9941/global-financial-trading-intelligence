@@ -527,6 +527,13 @@ def build(full: bool, install: bool) -> list[Gate]:
         from_payload(
             w0b.payload if w0b else None, "RECON", "w0b sign-recon", enabled=full
         ),
+        # A-7: the rail is the only writer (R1). INGEST proves a capture file lands
+        # in D0 through the rail; REFUSE is a negative test (registration without a
+        # receipt must fail); DECLARED proves the violation view is live, not empty
+        # by accident.
+        gate_runner("r1_gates.py")
+        if full
+        else Part(label="r1_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN),
         gate_runner("d1_gates.py")
         if full
         else Part(label="d1_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN),

@@ -62,7 +62,13 @@ def collect_and_register(symbol: str, run_tag: str) -> dict:
     artifacts_path.write_bytes(par_a.read_bytes())
     r = subprocess.run(
         ["uv", "run", "register_b1.py", "--summary", str(SCRATCH / f"b1_{run_tag}_1.json"),
-         "--d0-path", f"data/d0/binance/{symbol}/1d.parquet"],
+         "--d0-path", f"data/d0/binance/{symbol}/1d.parquet",
+         # A-7: this is a declared legacy write, not an oversight. Daily bars carry
+         # OHLCV, which the rail's single-price tick contract cannot represent, so
+         # the row must say so and the debt must be countable.
+         "--legacy-writer-reason",
+         "binance klines 1d bars carry OHLCV; the rail tick contract is "
+         "single-price, so this collector still writes D0 until A-7b lands"],
         capture_output=True, text=True, timeout=120, cwd=str(COLLECT),
     )
     return {"summary": s1, "summary2": s2, "cmp": cmp,

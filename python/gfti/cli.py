@@ -565,6 +565,45 @@ def cmd_doctor(args) -> int:
     writable = os.access(REPO, os.W_OK)
     add("repo_writable", "ok" if writable else "fail", str(REPO))
 
+    # A-7 (invariant R1): the rail is the only writer. This is the only place an
+    # operator sees the debt before a gate does — an undeclared direct write, and
+    # how much of the registry is still legacy-with-a-reason.
+    if cfg is not None and reachable:
+        sql = (
+            "SELECT coalesce((SELECT count(*) FROM d3.v_r1_violations), -1) || '|' || "
+            "coalesce((SELECT count(*) FROM d3.legacy_writes), 0) || '|' || "
+            "coalesce((SELECT count(*) FROM d3.datasets WHERE writer = 'rail'), 0)"
+        )
+        r = sh(
+            [*gcfg.psql_argv(cfg), "-A", "-t", "-c", sql],
+            timeout=30,
+            cwd=COMPOSE_DIR,
+            # compose interpolates `${VAR:?}` — the same rendered environment every
+            # other compose call gets (A-4).
+            env=gcfg.process_env(cfg),
+        )
+        out = (r.out or "").strip().splitlines()[-1] if r.out.strip() else ""
+        if not r.ok or out.count("|") != 2:
+            add("rail_writer", "skip", "d3 views absent — run `gfti install`", hard=False)
+        else:
+            viol, declared, rail_rows = (int(x) for x in out.split("|"))
+            if viol < 0:
+                add("rail_writer", "skip", "migration 007 not applied", hard=False)
+            elif viol:
+                add(
+                    "rail_writer",
+                    "fail",
+                    f"{viol} dataset(s) written outside the rail with no declared "
+                    "reason (A-7) — see d3.v_r1_violations",
+                )
+            else:
+                add(
+                    "rail_writer",
+                    "ok",
+                    f"{rail_rows} rail-written, {declared} declared legacy write(s), "
+                    "0 undeclared",
+                )
+
     failed = [c for c in checks if c["status"] == "fail"]
     warned = [c for c in checks if c["status"] == "warn"]
     ok = not failed and not (args.strict and warned)

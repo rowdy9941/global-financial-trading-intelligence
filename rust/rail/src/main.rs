@@ -44,7 +44,43 @@ fn market_prefix() -> String {
     }
 }
 
+/// `--ingest-file PATH` (A-7, item 23): batch ingress of a capture file through
+/// the *same* validate→stamp→publish path as stdin, so a collector never writes
+/// D0/D2/D3 itself. Anything else on the command line is a usage error — the rail
+/// is a service, and a silently ignored argument is a silently wrong ingest.
+fn ingest_file_arg() -> Option<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.as_slice() {
+        [] => None,
+        [flag, path] if flag == "--ingest-file" && !path.is_empty() => Some(path.clone()),
+        [flag] if flag == "--help" || flag == "-h" => {
+            println!("usage: rail [--ingest-file PATH]   (default: rows on stdin)");
+            std::process::exit(0);
+        }
+        _ => {
+            eprintln!("rail: usage: rail [--ingest-file PATH]  (default: stdin)");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Drain a reader into the queue. `None` = EOF (the normal end of a finite feed).
+fn feed<R: BufRead>(reader: R, tx: &std::sync::mpsc::Sender<Option<String>>) {
+    for line in reader.lines() {
+        match line {
+            Ok(l) => {
+                if tx.send(Some(l)).is_err() {
+                    return; // main loop gone
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = tx.send(None);
+}
+
 fn main() {
+    let ingest_file = ingest_file_arg();
     let signals = rt::install_signal_handlers();
     let hb = Heartbeat::start("rail", rt::heartbeat_interval_ms());
     if !signals {
@@ -67,20 +103,23 @@ fn main() {
         }
     };
 
-    // stdin → channel. `None` = EOF (the normal end of a finite feed).
+    // stdin (or the batch file) → channel. The reader is constructed *inside*
+    // the thread: `StdinLock` is not `Send`, so it can never be moved in.
     let (tx, rx) = channel::<Option<String>>();
-    std::thread::spawn(move || {
-        for line in std::io::stdin().lock().lines() {
-            match line {
-                Ok(l) => {
-                    if tx.send(Some(l)).is_err() {
-                        return; // main loop gone
-                    }
-                }
-                Err(_) => break,
+    let file_opened = if let Some(path) = &ingest_file {
+        match std::fs::File::open(path) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                eprintln!("rail: --ingest-file {path}: {e}");
+                std::process::exit(2);
             }
         }
-        let _ = tx.send(None);
+    } else {
+        None
+    };
+    std::thread::spawn(move || match file_opened {
+        Some(f) => feed(std::io::BufReader::new(f), &tx),
+        None => feed(std::io::stdin().lock(), &tx),
     });
 
     // NOT a held `StdoutLock`: a resident process has a heartbeat thread that also
@@ -94,6 +133,7 @@ fn main() {
     }
     let mut accepted: u32 = 0;
     let mut rejected: u32 = 0;
+    let mut by_symbol: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     let tick = Duration::from_millis(tick_ms);
 
     loop {
@@ -159,6 +199,7 @@ fn main() {
                             r.symbol, r.ts_nanos, r.arrival_nanos, r.price, r.rights
                         ));
                         accepted += 1;
+                        *by_symbol.entry(r.symbol.to_string()).or_insert(0) += 1;
                         hb.bump_events();
                     }
                     Err(e) => {
@@ -179,6 +220,21 @@ fn main() {
     } else {
         "eof"
     };
+    // A-7: the machine-readable ingest receipt. `d0_dump` cannot produce this — it
+    // only sees the rows that survived — so the counts that a D3 provenance row
+    // must carry (accepted *and* rejected) come from here, on stdout, framed.
+    let symbols: Vec<String> = by_symbol
+        .iter()
+        .map(|(k, v)| format!("\"{k}\":{v}"))
+        .collect();
+    let source = match &ingest_file {
+        Some(p) => format!("\"file\":\"{}\"", p.replace('\\', "/")),
+        None => "\"file\":null".to_string(),
+    };
+    emit(&format!(
+        "RAIL-INGEST {{\"accepted\":{accepted},\"rejected\":{rejected},\"stopped\":\"{stopped}\",{source},\"by_symbol\":{{{}}}}}",
+        symbols.join(",")
+    ));
     eprintln!(
         "RAIL-SUMMARY {{\"accepted\":{accepted},\"rejected\":{rejected},\"stopped\":\"{stopped}\"}}"
     );

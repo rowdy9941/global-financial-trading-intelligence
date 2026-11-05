@@ -498,7 +498,7 @@ Evidence (verbatim):
 · bare-PATH transcript: `MISS docker … MISS cargo … MISS uv … install.sh: tier A is not installable
   — missing: docker cargo uv` `rc=2`.
 
-**A-7 · Make the rail the only writer (fixes I1 / R1)**
+**A-7 · Make the rail the only writer (fixes I1 / R1)** — **DONE 2026-11-05**
 23. Collectors hand rows to the rail instead of writing the lake: either the rail gains a
     `--ingest-file` mode, or the Python collectors publish to a local socket the rail owns.
 24. The rail then writes D0 (via `d0`), D1 (via `ilp`), D2 (JetStream) and D3 provenance — one
@@ -507,6 +507,63 @@ Evidence (verbatim):
     collector→Parquet write is refused/flagged by `gfti doctor`.
 26. This is the item that turns invariant R1 from a comment into a property. It is Phase A, not B,
     because "everything wired" is exactly this.
+
+Delivered: `rail --ingest-file PATH` reads a capture file through the *same*
+validate→stamp→publish path as stdin and prints a framed receipt
+(`RAIL-INGEST {"accepted":N,"rejected":M,"stopped":"eof","file":"…","by_symbol":{…}}`) next to its
+`OK` rows. That receipt is the point: a collector can only report how many rows it *wrote*, while
+the rail reports how many it *accepted* and *rejected at its own boundary* — evidence from a second
+party. `d0_dump --stdin` skips the framed line by name (and nothing else), so
+`rail --ingest-file f | d0_dump --stdin out.parquet` is still one pipe.
+
+`python/collect/rail_ingest.py` is the collector-side driver: rows → `rail --ingest-file` →
+`d0_dump` → summary JSON carrying the receipt. It refuses to emit a summary if the rail's accepted
+count disagrees with the rows it submitted or if the rail rejected anything ("a partial batch is not
+a dataset"). Batch ingress publishes into `market.ingest.<SYMBOL>`, never `market.spot.*`,
+so a historical replay cannot look like a live feed to a running consumer; `register_b1.py` asserts
+the prefix starts with `market.` and records it.
+
+Migration `007_rail_writer.sql` gives the manifest a writer: `d3.datasets.writer`
+(`rail | legacy-collector`, closed by CHECK), the receipt counts/digest, an append-only
+`d3.rail_ingests` history, a single-row `d3.rail_contract` cutoff, and `d3.v_r1_violations` =
+legacy rows captured *after* the cutoff with no declared reason. `register_b1.py` now requires one
+of exactly two things: a rail receipt, or `--legacy-writer-reason` (≥20 chars, recorded
+append-only in `d3.legacy_writes`). Neither ⇒ refused before any SQL runs.
+
+Why an exception exists at all, stated plainly: the bar collectors (`binance_daily`,
+`hyperliquid_daily`, `resample_1m_to_1d`) emit OHLCV, and the rail's contract is single-price. Making
+them "comply" by pushing only the close price would delete data — a worse defect than the one being
+fixed. So they register as `legacy-collector` with a recorded reason, the debt is a countable number
+in `d3.v_r1_writer_mix`, and `gfti doctor` prints it (`rail_writer` check). The remaining work — an
+explicit rail bar schema — is tracked as **A-7b** below.
+
+Two real defects were found by building this, not by reasoning about it:
+· The manifest row and its writer evidence were written in **two** psql calls, so the R1 view could
+  observe a legacy row whose declared reason had not landed yet. The 15-minute capture cron
+  overlapped a gate run and produced exactly that false violation. Both inserts are now one
+  transaction.
+· The A-7 proof cannot use "two runs are byte-identical": `arrival_nanos` is the rail's real
+  boundary clock and *must* differ between runs. The R1 `INGEST` case therefore asserts identical
+  `(symbol, ts_nanos, price)` payloads and a differing arrival stamp — the weaker claim that is
+  actually true.
+
+Evidence (verbatim):
+`R1-INGEST ok   rail accepted 200 rejected 1; D0 wrote 200 rows, payload identical across two runs (arrival stamp differs by design)`
+· `R1-REFUSE ok   refused without a receipt (rc!=0, message names the rail); with a declared reason it proceeds to the artifact check`
+· `R1-DECLARED ok   view empty (1 rail-written, 6 declared legacy); an undeclared write inside a rolled-back txn was flagged`
+· `R1-DOCTOR ok   doctor rail_writer ok — 1 rail-written, 6 declared legacy write(s), 0 undeclared`
+· real capture through the new path: 16 recorded Hyperliquid trade segments → `rail --ingest-file`
+  → `d0_dump` → `d0/hyperliquid/BTC-USDC/tick.parquet`, 199,818 rows, `writer='rail'`,
+  `rail_accepted=199998`, `rail_rejected=0`, D3 row `verified=t`, zero open gaps.
+· live cron (`scripts/hl_capture.sh`) re-run end-to-end after the change: `hl_capture: OK …`,
+  `register_b1` accepted the declared-reason path, `d3.v_r1_violations` stayed at 0.
+
+**A-7b · Rail bar schema (follow-on, tracked)**
+The rail's ingest contract is `symbol ts_nanos price rights`. Bar captures carry OHLCV, so they
+currently register as declared legacy writes. A-7b adds a second record type (`bars`, with
+open/high/low/close/volume) and a matching D0 schema, then converts the three bar collectors and
+deletes `d3.legacy_writes` from the happy path. Until then the exception is visible, bounded, and
+counted — not silent.
 
 **A-8 · Make D2 a real store**
 27. Declare JetStream streams for `market.*`, `signal.*`, `order.*`, `risk.*`, `ledger.*`, `seat.*`

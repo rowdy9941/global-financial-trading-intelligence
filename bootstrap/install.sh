@@ -126,10 +126,11 @@ echo "[4/7] python lanes (uv sync)"
 echo "[5/7] rust workspace build"
 ( cd "$REPO/rust" && cargo build --release )
 
-echo "[6/7] migrations (001-006, idempotent)"
+echo "[6/7] migrations (001-007, idempotent)"
 # A-4: the psql coordinates come from the config rendered above, not from a copy.
 for f in 001_d3_d4_init 002_w0b_approval_flow 003_b1_data_plane \
-         004_w0c_llm_tasks 005_w1_artifacts 006_d3_intraday_metadata; do
+         004_w0c_llm_tasks 005_w1_artifacts 006_d3_intraday_metadata \
+         007_rail_writer; do
     cat "$REPO/compose/sql/$f.sql" | \
         docker compose -f "$COMPOSE_FILE" exec -T postgres \
         psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 >/dev/null

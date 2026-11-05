@@ -71,6 +71,7 @@ uv run register_b1.py \
     --data-class hyperliquid \
     --volume-available true --volume-kind base_asset_volume --volume-unit BTC \
     --schema-version 1 \
+    --legacy-writer-reason "hyperliquid candleSnapshot 1m bars carry OHLCV; the rail tick contract is single-price, so this capture still writes D0 until A-7b (rail bar schema) lands" \
     --pre-inception-note "public candleSnapshot serves only the most recent ~3 days at 1m (measured 2026-11-03: 3d served, 4d empty), so nothing earlier is retrievable and no deeper intraday history is claimed by any row"
 
 # Derive the DAILY projection of the accumulated capture. The training lane is
@@ -94,6 +95,7 @@ uv run resample_1m_to_1d.py \
 uv run register_b1.py \
     --summary "$DAILY_SUMMARY" --d0-path "$DAILY_REL" \
     --data-class hyperliquid --key-suffix=-derived \
+    --legacy-writer-reason "derived 1d projection of a legacy 1m bar capture; OHLCV is not representable in the rail tick contract until A-7b lands" \
     --pre-inception-note "derived 1d projection of the PIT 1m capture hyperliquid/BTC-USDC/1m — history begins when that capture began (public API retains only ~3 days of 1m), so nothing earlier exists in this lineage" \
     >/dev/null
 

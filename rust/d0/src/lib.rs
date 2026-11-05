@@ -137,6 +137,13 @@ pub fn run_stdin(path: &str) -> Result<(usize, usize, u64), String> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        // A-7: the rail prints a framed `RAIL-INGEST {...}` receipt on stdout after
+        // the rows, so a `rail --ingest-file f | d0_dump --stdin out` pipe carries
+        // exactly one non-row line. Skipping it is not leniency: any other
+        // unrecognised line still counts as a rejection.
+        if line.starts_with("RAIL-INGEST ") || line.starts_with("RAIL-SUMMARY ") {
+            continue;
+        }
         match parse_row(line) {
             Some(r) => rows.push(r),
             None => rejected += 1,

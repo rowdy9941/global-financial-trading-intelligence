@@ -110,8 +110,72 @@ def metadata_update_clause(
     return f", {', '.join(updates)}" if updates else ""
 
 
+_RAIL_KEYS = ("accepted", "rejected", "market_prefix", "receipt_path", "receipt_sha256")
+
+
+def rail_evidence(summary: dict) -> dict | None:
+    """Validate the rail's ingest receipt, or return None (A-7, invariant R1).
+
+    A collector that wrote its own Parquet cannot produce this block: the counts
+    are what the rail accepted and rejected at its boundary, and the receipt file
+    is the rail's own stdout. Registration therefore requires proof of a writer
+    that is not the caller — which is the whole point of R1.
+    """
+    rail = summary.get("rail")
+    if rail is None:
+        return None
+    if not isinstance(rail, dict):
+        raise SystemExit("summary 'rail' block is not an object")
+    missing = [k for k in _RAIL_KEYS if k not in rail]
+    if missing:
+        raise SystemExit(f"rail block missing keys: {missing}")
+    if summary.get("writer") != "rail":
+        raise SystemExit("summary writer must be 'rail'")
+    accepted, rejected, rows = rail["accepted"], rail["rejected"], summary["rows"]
+    if not isinstance(accepted, int) or not isinstance(rejected, int):
+        raise SystemExit("rail accepted/rejected must be ints")
+    if rejected != 0:
+        raise SystemExit(
+            f"rail rejected {rejected} row(s) — a partial batch is not a dataset"
+        )
+    if accepted != rows:
+        raise SystemExit(f"rail accepted {accepted} but the summary claims rows={rows}")
+    if not _SHA.fullmatch(str(rail["receipt_sha256"])):
+        raise SystemExit("rail receipt_sha256 is not 64 hex chars")
+    if not str(rail["market_prefix"]).startswith("market."):
+        raise SystemExit(
+            f"rail market_prefix is not a market namespace: {rail['market_prefix']!r}"
+        )
+    receipt = Path(rail["receipt_path"])
+    if not receipt.is_absolute():
+        receipt = REPO / receipt
+    if not receipt.is_file():
+        raise SystemExit(f"rail receipt not found: {rail['receipt_path']}")
+    doc = json.loads(receipt.read_text())
+    on_disk = hashlib.sha256(
+        json.dumps(doc["receipt"], sort_keys=True).encode()
+    ).hexdigest()
+    if on_disk != rail["receipt_sha256"]:
+        raise SystemExit(
+            f"rail receipt digest mismatch: summary says {rail['receipt_sha256']}, "
+            f"file hashes to {on_disk}"
+        )
+    if doc["receipt"]["accepted"] != accepted:
+        raise SystemExit("rail receipt accepted count disagrees with the summary")
+    return {
+        "accepted": accepted,
+        "rejected": rejected,
+        "market_prefix": str(rail["market_prefix"]),
+        "receipt_path": str(receipt.relative_to(REPO))
+        if receipt.is_relative_to(REPO)
+        else str(receipt),
+        "receipt_sha256": str(rail["receipt_sha256"]),
+    }
+
+
 def validated(s: dict) -> dict:
     """Validate every summary field that reaches SQL, failing loud."""
+
     out = dict(s)
     for name in ("symbol", "interval", "source"):
         value = str(out[name])
@@ -200,6 +264,14 @@ def main():
     a.add_argument("--volume-unit", default=None, help="unit used by source volume")
     a.add_argument("--schema-version", default=None)
     a.add_argument(
+        "--legacy-writer-reason",
+        default=None,
+        help="A-7: register a collector that still writes its own Parquet. Requires a\n"
+        "truthful reason (>= 20 chars); it is recorded append-only in\n"
+        "d3.legacy_writes and shown by `gfti doctor`. Without either this or a rail\n"
+        "receipt, registration is refused.",
+    )
+    a.add_argument(
         "--pre-inception-note",
         default=None,
         help="truthful justification for the pre-first_day gap; defaults to the\n        BTC spot-history wording. A dataset whose real reason differs (e.g.\n        intraday API retention) MUST supply its own — the default is a claim\n        about history that may not exist for this key",
@@ -207,6 +279,30 @@ def main():
     args = a.parse_args()
 
     s = validated(json.loads(Path(args.summary).read_text()))
+    ev = rail_evidence(s)
+    reason = (args.legacy_writer_reason or "").strip()
+    reason_sql = ""
+    if ev is not None and reason:
+        raise SystemExit(
+            "--legacy-writer-reason contradicts the rail receipt: this capture "
+            "went through the rail, so it must register as writer='rail'"
+        )
+    if ev is None:
+        if not reason:
+            raise SystemExit(
+                "summary has no 'rail' block and no --legacy-writer-reason: this "
+                "capture did not go through the rail, so its provenance cannot be "
+                "proven by anyone but the caller (A-7 refuses it)"
+            )
+        if len(reason) < 20:
+            raise SystemExit("--legacy-writer-reason must be at least 20 chars")
+        # The reason is prose and will contain ';' and ',' — forbidding them would
+        # force worse evidence. The literal is made safe by doubling quotes, which
+        # is exact for Postgres, rather than by refusing characters.
+        if "\x00" in reason or "\n" in reason:
+            raise SystemExit("--legacy-writer-reason must be single-line, no NUL")
+        reason_sql = reason.replace("'", "''")
+    writer = "rail" if ev is not None else "legacy-collector"
     metadata = validate_metadata(
         interval=s["interval"],
         volume_available=(
@@ -251,23 +347,68 @@ def main():
         volume_unit_provided=args.volume_unit is not None,
         schema_version_provided=args.schema_version is not None,
     )
+    if ev is None:
+        rail_cols = "NULL, NULL, NULL, NULL"
+        rail_updates = (
+            "rail_accepted = NULL, rail_rejected = NULL, "
+            "rail_receipt_sha256 = NULL, rail_receipt_path = NULL"
+        )
+    else:
+        rail_cols = (
+            f"{ev['accepted']}, {ev['rejected']}, "
+            f"'{ev['receipt_sha256']}', '{ev['receipt_path']}'"
+        )
+        rail_updates = (
+            "rail_accepted = EXCLUDED.rail_accepted, "
+            "rail_rejected = EXCLUDED.rail_rejected, "
+            "rail_receipt_sha256 = EXCLUDED.rail_receipt_sha256, "
+            "rail_receipt_path = EXCLUDED.rail_receipt_path"
+        )
+    # A-7: the manifest row and its writer evidence go in ONE transaction. Written
+    # separately, the R1 view can observe a legacy row whose declared reason has
+    # not been inserted yet — a false violation (measured: the 15-minute capture
+    # cron overlapped a gate run and produced exactly that).
+    if ev is not None:
+        # The receipt history is append-only — a re-capture is a new fact, not an
+        # overwrite of the evidence for the previous one.
+        provenance = f"""
+            INSERT INTO d3.rail_ingests (dataset_key, dataset_rows, accepted, rejected,
+                                         receipt_path, receipt_sha256, market_prefix)
+            VALUES ('{key}', {s["rows"]}, {ev["accepted"]}, {ev["rejected"]},
+                    '{ev["receipt_path"]}', '{ev["receipt_sha256"]}',
+                    '{ev["market_prefix"]}');
+        """
+    else:
+        # Declared, not silent: the reason is what makes the debt auditable.
+        provenance = f"""
+            INSERT INTO d3.legacy_writes (dataset_key, collector, reason)
+            VALUES ('{key}', '{args.data_class}', '{reason_sql}');
+        """
+
     psql(f"""
+        BEGIN;
         INSERT INTO d3.datasets (dataset_key, source, license_class, granularity,
                                  expected_from, expected_to, d0_path, rows,
                                  sha256, captured_at, verified, volume_kind,
-                                 volume_unit, volume_available, schema_version)
+                                 volume_unit, volume_available, schema_version,
+                                 writer, rail_accepted, rail_rejected,
+                                 rail_receipt_sha256, rail_receipt_path)
         VALUES ('{key}', '{s["source"]}', '{s["license"]}', '{s["interval"]}',
                 '{s["first_day"]}T00:00:00Z', '{s["last_day"]}T00:00:00Z',
                 '{d0_rel}', {s["rows"]}, '{sha}', now(), FALSE,
                 {"NULL" if metadata["volume_kind"] is None else f"'{metadata['volume_kind']}'"},
                 {"NULL" if metadata["volume_unit"] is None else f"'{metadata['volume_unit']}'"},
-                {str(metadata["volume_available"]).upper()}, '{metadata["schema_version"]}')
+                {str(metadata["volume_available"]).upper()}, '{metadata["schema_version"]}',
+                '{writer}', {rail_cols})
         ON CONFLICT (dataset_key) DO UPDATE SET
             source = EXCLUDED.source, license_class = EXCLUDED.license_class,
             granularity = EXCLUDED.granularity,
             expected_from = EXCLUDED.expected_from, expected_to = EXCLUDED.expected_to,
             d0_path = EXCLUDED.d0_path, rows = EXCLUDED.rows, sha256 = EXCLUDED.sha256,
-            captured_at = now(){metadata_update};
+            captured_at = now(), writer = EXCLUDED.writer,
+            {rail_updates}{metadata_update};
+        {provenance}
+        COMMIT;
     """)
 
     # idempotent registry refresh: a new capture REPLACES this dataset's

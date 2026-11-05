@@ -58,7 +58,8 @@ jobs:
         # this lane and are not silently swept in by it.
         run: |
           (cd python/train && uv run pytest -q ../gates/test_status.py)
-          uvx ruff check python/gates/status.py python/gates/test_status.py python/gates/tier_gates.py --output-format concise
+          uvx ruff check python/gates/status.py python/gates/test_status.py python/gates/tier_gates.py \
+            python/gates/r1_gates.py --output-format concise
       - name: cross-OS install contract (A-6)
         # POSIX parses under dash on this runner and the bare-PATH run proves the
         # installer names every missing tool at once; CIOS proves the workflow
@@ -79,12 +80,13 @@ jobs:
           --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      - name: apply 001-006 twice (idempotent migrations must not error)
+      - name: apply 001-007 twice (idempotent migrations must not error)
         run: |
           for i in 1 2; do
             for f in compose/sql/001_d3_d4_init.sql compose/sql/002_w0b_approval_flow.sql \
                      compose/sql/003_b1_data_plane.sql compose/sql/004_w0c_llm_tasks.sql \
-                     compose/sql/005_w1_artifacts.sql compose/sql/006_d3_intraday_metadata.sql; do
+                     compose/sql/005_w1_artifacts.sql compose/sql/006_d3_intraday_metadata.sql \
+                    compose/sql/007_rail_writer.sql; do
               docker run --rm -v "$PWD/compose/sql:/sql:ro" \
                 --network host \
                 -e PGPASSWORD=ci-local-only postgres:17 \
