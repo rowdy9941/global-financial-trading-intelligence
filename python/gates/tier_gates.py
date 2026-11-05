@@ -348,7 +348,7 @@ def case_encoding():
                 problems.append(f"{enc} --help printed no usage")
     ok = not problems
     return ok, (
-        "4 verbs x 2 encodings survive"
+        "3 verbs x 2 encodings survive"
         + (f" problems={problems[:3]}" if problems else "")
     )
 

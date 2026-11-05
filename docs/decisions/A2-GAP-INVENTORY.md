@@ -484,7 +484,9 @@ encode character '\u2192'` because every console on Windows defaults to cp1252 a
 text is full of `→`. `_safe_console()` now sets `errors="replace"` on stdout/stderr at entry — the
 user's encoding (and `PYTHONIOENCODING`) stays authoritative, an unrepresentable glyph degrades to
 `?`, and a help screen can no longer abort a run. The new `ENCODING` case reproduces that crash on
-tier A by running four verbs under `PYTHONIOENCODING=cp1252` and `ascii`.
+tier A by running three verbs under `PYTHONIOENCODING=cp1252` and `ascii`.
+(`config` is excluded from that list on purpose: its exit code depends on whether `compose/.env`
+exists, so failing it in a secret-less CI checkout would say nothing about encoding.)
 
 Evidence (verbatim):
 `SUMMARY {"CIOS": true, "ENCODING": true, "POSIX": true, "PROBE": true, "PS1": true, "ok": true}`
