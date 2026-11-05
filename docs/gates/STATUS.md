@@ -41,14 +41,14 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 
 | # | Gate | Verdict | Evidence |
 |---|---|---|---|
-| 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs · `gfti` CLI contract 7/7, 14 verbs (`cli_gates.py`, A2 A-3) · one-config contract 6/6 (`config_gates.py`, A2 A-4): `CONFIG` `RENDER` `PIVOT` `PARITY` `SECRETS` `DOCTOR` — a `:-` fallback or a bare `${VAR}` turns `RENDER` red · health view 3/3 (`health_gates.py`, A2 A-5): `FIELDS` `STALE` `HONEST` — `docker pause` on a live service turns the view red, names it and exits non-zero, then recovers on `unpause` · cross-OS install 4/4 (`tier_gates.py`, A2 A-6): `PROBE` `POSIX` `PS1` `CIOS` — `POSIX` runs the installer on a PATH holding only a shell and python, so a bash-ism or a missing-tool message that stops at the first gap fails it |
+| 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs · `gfti` CLI contract 7/7, 14 verbs (`cli_gates.py`, A2 A-3) · one-config contract 6/6 (`config_gates.py`, A2 A-4): `CONFIG` `RENDER` `PIVOT` `PARITY` `SECRETS` `DOCTOR` — a `:-` fallback or a bare `${VAR}` turns `RENDER` red · health view 3/3 (`health_gates.py`, A2 A-5): `FIELDS` `STALE` `HONEST` — `docker pause` on a live service turns the view red, names it and exits non-zero, then recovers on `unpause` · cross-OS install 5/5 (`tier_gates.py`, A2 A-6): `PROBE` `POSIX` `PS1` `CIOS` `ENCODING` — `POSIX` runs the installer on a PATH holding only a shell and python, so a bash-ism or a missing-tool message that stops at the first gap fails it; `ENCODING` runs three verbs under `PYTHONIOENCODING=cp1252` and `ascii`, which is how the Windows console crash is reproduced on tier A |
 | 2 | **G-STORE** | `OK` | 6 migrations applied twice, no error · append-only · 10× restart · sign-recon · `d1_gates.py ALL` |
 | 3 | **G-RAIL** | `OK` | `cargo test -p rail` 9 passed · FANOUT **p99 1.61 ms vs 2.00 ms**, p50 310 µs, subs ready 54 ms, 20,000/20,000 rows |
 | 4 | **G-ENGINE** | `OK` | ENGINE · kill cascade · residency (`rt_gates.py` 6/6 incl. COMPOSE supervision) · `cargo test -p exec` 11 passed |
 | 5 | **G-DATA** | `blocked` | capture green; D3 `BTC-USDC/1m` = 4,440 rows, **`BTC-USDC/1d` = 1,347 (native)**, `BTC-USDC/1d-derived` = 2, `BTC-USD/1d` = 1,346 — blocked only by the Kraken archive |
 | 6 | **G-RESEARCH** | `OK` | `w1_gates.py ALL` all cases true |
 | 7 | **G-PILOT-E2E** | `blocked` | fixture P1/P2/P3 green · real-data P1 green · P2/P3 await owner inputs |
-| 8 | **G-CI-OS** | `OK` | CI run green on the exact commit **with ≥2 OS families** — the aggregator reads `gh run view --json jobs` and counts `ubuntu-*` / `macos-*` / `windows-*` jobs, so a ubuntu-only green run no longer satisfies A0 §2 (A2 A-6 item 22) |
+| 8 | **G-CI-OS** | `OK` | CI run `42028289478` green on `e4ac448` — **3/3 families**: `ubuntu:green macos:green windows:green`. The aggregator reads `gh run view --json jobs` and counts `ubuntu-*` / `macos-*` / `windows-*` jobs, so a ubuntu-only green run no longer satisfies A0 §2 (A2 A-6 item 22). macOS reported `TIER-PROBE ok — tier=B`, Windows `tier=C … native install refused rc=2 (WSL2)` |
 
 Five gates are locally closable and closed. Two are blocked on the owner, by design;
 neither is a code defect and neither is reported as green.
