@@ -1,5 +1,10 @@
 # A0 gate 8 — per-OS toolchain matrix. Gates needing the D0 archive (W1 replay)
-# run on the prod box only; CI keeps cargo+python+SQL-idempotence checks.
+# and the Docker-backed clean install run on the prod box only (tier A); CI keeps
+# cargo + python + SQL-idempotence + the cross-OS install contract (A2 A-6).
+#
+# Job ids are prefixed with the OS family on purpose: `python/gates/status.py`
+# reads `gh run view --json jobs` and proves the newest release run went green on
+# ≥2 families. Renaming a job without the prefix breaks that assertion, loudly.
 name: ci
 on:
   push:
@@ -7,10 +12,10 @@ on:
   pull_request:
 
 jobs:
-  rust:
+  ubuntu-rust:
     strategy:
       matrix:
-        os: [ubuntu-latest]  # tier A; add macos/windows runners as tiers B/C come online
+        os: [ubuntu-latest]  # tier A
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -30,7 +35,7 @@ jobs:
         working-directory: rust
         run: cargo test --all --all-features
 
-  python:
+  ubuntu-python:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,9 +58,14 @@ jobs:
         # this lane and are not silently swept in by it.
         run: |
           (cd python/train && uv run pytest -q ../gates/test_status.py)
-          uvx ruff check python/gates/status.py python/gates/test_status.py --output-format concise
+          uvx ruff check python/gates/status.py python/gates/test_status.py python/gates/tier_gates.py --output-format concise
+      - name: cross-OS install contract (A-6)
+        # POSIX parses under dash on this runner and the bare-PATH run proves the
+        # installer names every missing tool at once; CIOS proves the workflow
+        # still declares all three families.
+        run: python3 python/gates/tier_gates.py POSIX CIOS PS1 PROBE
 
-  sql-idempotence:
+  ubuntu-sql:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -81,3 +91,55 @@ jobs:
                 psql -h 127.0.0.1 -U gfti_app -d gfti -v ON_ERROR_STOP=1 -f "/sql/$(basename $f)" || exit 1
             done
           done
+
+  # Tier B — macOS. GitHub's hosted macOS runners have no Docker daemon, so this
+  # job proves the half that does not need one: the Rust engines build and pass
+  # their unit tests, the python lanes run, the tier probe reports B, and the
+  # installer is POSIX sh. The Docker-backed clean-install-twice for tier B is an
+  # owner action on a macOS host with Docker Desktop (docs/install-tiers.md), and
+  # this job does not claim it.
+  macos-tier-b:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: engine unit tests (no latency gates — those are tier A)
+        working-directory: rust
+        run: cargo test --all --all-features
+      - name: python lanes
+        working-directory: python/train
+        run: uv run pytest -q
+      - name: tier probe is B and the installer is POSIX on macOS /bin/sh
+        run: python3 python/gates/tier_gates.py PROBE POSIX PS1
+
+  # Tier C — Windows. Native Windows is supported for the CLI only; services run
+  # under WSL2 (docs/install-tiers.md). So this job exercises exactly the paths a
+  # native Windows user has: the PowerShell shim, the CLI's config/tier/workflows
+  # verbs, and the refusal that points at WSL2. No docker call may appear here.
+  windows-tier-c:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: tier is C and the PowerShell shim matches the CLI
+        run: python python/gates/tier_gates.py PROBE PS1
+      - name: CLI non-Docker verbs
+        run: |
+          python python/gfti/cli.py tier --json
+          python python/gfti/cli.py config --json > $null
+          python python/gfti/cli.py workflows --json > $null
+          python python/gfti/cli.py --help > $null
+      - name: native install refuses and names WSL2
+        shell: pwsh
+        run: |
+          python python/gfti/cli.py install
+          if ($LASTEXITCODE -ne 2) { throw "expected exit 2, got $LASTEXITCODE" }

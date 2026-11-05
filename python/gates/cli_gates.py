@@ -44,6 +44,7 @@ CORE_VERBS = (
     "down",
     "status",
     "doctor",
+    "tier",
     "logs",
     "smoke",
     "config",

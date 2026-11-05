@@ -444,7 +444,7 @@ Evidence (verbatim):
 · `OK 1 G-INSTALL: gfti CLI contract=true | one config file=true | health view=true`
 · human view while up: `cell running healthy yes 0 1s 7 0 off 0`.
 
-**A-6 · Cross-OS install**
+**A-6 · Cross-OS install** — **DONE 2026-11-05**
 18. Implement the `--tier` probe A0 §2 already promises: A (Linux native) / B (macOS) / C (Windows
     WSL2). Refuse loudly below the minimum, with the exact missing prerequisite.
 19. POSIX `sh` installer + `gfti.ps1` PowerShell shim; no bash-isms in the POSIX path.
@@ -452,6 +452,41 @@ Evidence (verbatim):
     latency gates).
 21. Windows tier C documented as WSL2; CI on `windows-latest` limited to the CLI's non-Docker paths.
 22. Gate: CI green on ≥2 OS families, and the clean-install-twice rule from A0 §2 runs on tier A.
+
+Delivered: `gfti tier [--json]` is the probe, and `bootstrap/install.sh` **asks it** instead of
+carrying its own `uname` table — the installer, `gfti doctor` and the shim now cannot disagree about
+the tier, which was the same two-definitions defect as two config files. `install.sh` is
+`#!/bin/sh` with no bash-only token, resolves its own path through a symlink chain, and probes the
+prerequisites by **collecting** them: a host without docker *and* cargo gets one message listing both
+and exits 2 before anything is touched (`MISS docker`, `MISS cargo`, `MISS uv`, then
+`tier A is not installable — missing: docker cargo uv`). `cmd_install` shells out with `sh`, and on
+native Windows refuses with the WSL2 route instead of raising `OSError`.
+`bootstrap/gfti.ps1` is the Windows twin of the sh shim — same tier, same `config --json` byte for
+byte. `docs/install-tiers.md` is the operator half: prerequisites, per-tier commands, and the parts
+CI does **not** claim.
+
+CI is now three families, job ids prefixed so the claim is machine-checkable:
+`ubuntu-rust` / `ubuntu-python` / `ubuntu-sql`, `macos-tier-b` (cargo test + python lanes + PROBE/
+POSIX/PS1; **no** latency gates), `windows-tier-c` (ps1 shim, tier/config/workflows verbs, and the
+native-install refusal). Hosted macOS runners have no Docker daemon, so the macOS job does not claim
+a Docker-backed clean install — that stays an owner action, stated in `docs/install-tiers.md`.
+`G-CI-OS` reads `gh run view --json jobs` and requires **green on ≥2 OS families on the exact
+release commit**, so the YAML alone cannot satisfy it.
+
+`python/gates/tier_gates.py` (4 cases, wired into `G-INSTALL`) is the gate. `POSIX` is the case that
+matters: besides `dash -n`, it copies *only* a shell and python into a temp PATH and runs the
+installer there — bash is absent, docker/cargo/uv are absent, and the run must still name every
+missing prerequisite and exit 2.
+
+Evidence (verbatim):
+`SUMMARY {"CIOS": true, "POSIX": true, "PROBE": true, "PS1": true, "ok": true}`
+· `TIER-POSIX ok — posix=['sh', 'dash'] bare-PATH names all 3 missing, rc=2`
+· `TIER-PROBE ok — tier=A shim/doctor agree, --tier=B refused rc=2`
+· `TIER-PS1 ok — pwsh pwsh: tier A, config parity on 24 keys`
+· `CLI-HELP ok — rc=0 verbs=14` (the `tier` verb is in the front door)
+· `sh bootstrap/install.sh` under `/bin/sh` → `install: OK`, 10.5 s warm.
+· bare-PATH transcript: `MISS docker … MISS cargo … MISS uv … install.sh: tier A is not installable
+  — missing: docker cargo uv` `rc=2`.
 
 **A-7 · Make the rail the only writer (fixes I1 / R1)**
 23. Collectors hand rows to the rail instead of writing the lake: either the rail gains a

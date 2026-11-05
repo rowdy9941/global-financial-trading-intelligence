@@ -442,17 +442,39 @@ def ci_evidence() -> Part:
         )
     head = run(["git", "rev-parse", "HEAD"])[1].strip()
     same = row.get("headSha") == head
+
+    # A2 A-6 item 22: "CI green on ≥2 OS families" is a claim about the run, not
+    # about the YAML. Job ids are prefixed with their family for exactly this.
+    families = {}
+    jobs_argv = ["gh", "run", "view", str(row.get("databaseId")), "--json", "jobs"]
+    jrc, jout = run(jobs_argv)
+    if jrc == 0:
+        try:
+            for job in json.loads(jout).get("jobs") or []:
+                fam = str(job.get("name") or "").split("-")[0]
+                if fam in ("ubuntu", "macos", "windows"):
+                    families.setdefault(fam, []).append(job.get("conclusion"))
+        except json.JSONDecodeError:
+            pass
+    green_families = sorted(f for f, cs in families.items() if cs and all(c == "success" for c in cs))
+    os_ok = len(green_families) >= 2
+    fam_detail = " ".join(
+        f"{f}:{'green' if f in green_families else ','.join(map(str, cs))}"
+        for f, cs in sorted(families.items())
+    ) or "no OS-prefixed jobs"
+
     return Part(
         label="CI newest run",
         argv=argv,
-        ok=row.get("conclusion") == "success" and same,
+        ok=row.get("conclusion") == "success" and same and os_ok,
         detail=f"{row.get('conclusion')} on {str(row.get('headSha'))[:7]}"
-        + ("" if same else f" — stale: tree HEAD is {head[:7]}"),
+        + ("" if same else f" — stale: tree HEAD is {head[:7]}")
+        + f" · families {len(green_families)}/3 [{fam_detail}]",
     )
 
 
 def install_twice() -> Part:
-    argv = ["bash", str(REPO / "bootstrap" / "install.sh"), "--verify"]
+    argv = ["sh", str(REPO / "bootstrap" / "install.sh"), "--verify"]
     ok, detail = True, "two consecutive runs ok"
     for i in (1, 2):
         rc, out = run(argv)
@@ -475,10 +497,14 @@ def build(full: bool, install: bool) -> list[Gate]:
     # A-5: the health view is the surface an operator actually reads, so it belongs
     # in the gate that certifies the installed product rather than in a store gate.
     health = gate_runner("health_gates.py")
+    # A-6: the tier probe, the POSIX installer and the PowerShell shim, in the gate
+    # that certifies the installed product. ~3 s, no Docker.
+    tier = gate_runner("tier_gates.py")
     g1.parts = [
         from_payload(cli.payload, "ok", "gfti CLI contract (A2 A-3)", log=cli.log),
         from_payload(cfg.payload, "ok", "one config file (A2 A-4)", log=cfg.log),
         from_payload(health.payload, "ok", "health view (A2 A-5)", log=health.log),
+        from_payload(tier.payload, "ok", "cross-OS install (A2 A-6)", log=tier.log),
         # Placeholder only. The two clean installs are run at the END of build(),
         # because they saturate the CPU and would poison FANOUT's 2 ms p99 budget.
         Part(label="install.sh --verify x2", ok=False, unrun=True, detail=OFF),

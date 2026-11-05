@@ -186,6 +186,20 @@ def detect_tier() -> tuple:
     return "?", f"{sys.platform} {release}"
 
 
+def cmd_tier(args) -> int:
+    """A0 §2's tier probe, as a verb. The installer asks this instead of keeping
+    its own copy of the OS table — one definition, one answer."""
+    tier, detail = detect_tier()
+    known = tier in ("A", "B", "C")
+    if args.json:
+        _json_out({"tier": tier, "detail": detail, "supported": known})
+    else:
+        say(f"tier {tier} — {detail}")
+        if not known:
+            say("unsupported: A0 §2 covers Linux (A), macOS (B), Windows via WSL2 (C)")
+    return EXIT_OK if known else EXIT_ENV
+
+
 def docker_up() -> tuple:
     """(reachable, version-or-error). A 10 s cap: a wedged daemon must not hang a CLI."""
     r = sh(["docker", "info", "--format", "{{.ServerVersion}}"], timeout=10)
@@ -447,7 +461,9 @@ def cmd_doctor(args) -> int:
     )
 
     tier, tier_detail = detect_tier()
-    add("tier", "ok" if tier in ("A", "B", "C") else "warn", f"{tier} — {tier_detail}")
+    # An unknown tier is a hard fail, not a warning: every other check below is
+    # then describing a host the product does not support (A2 A-6, item 18).
+    add("tier", "ok" if tier in ("A", "B", "C") else "fail", f"{tier} — {tier_detail}")
 
     if not COMPOSE_FILE.is_file():
         add("compose_file", "fail", f"missing {COMPOSE_FILE}")
@@ -600,13 +616,21 @@ def cmd_install(args) -> int:
     if not script.is_file():
         say(f"gfti install: missing {script}")
         return EXIT_ENV
-    argv = ["bash", str(script)]
+    argv = ["sh", str(script)]
     if args.verify:
         argv.append("--verify")
     if args.tier:
         argv.append(f"--tier={args.tier}")
-    say(f"gfti install: {' '.join(argv[1:]) or '(no flags)'}")
-    r = sh(argv, cwd=REPO, capture=False)
+    # POSIX sh, not bash: install.sh is the one program that must run where bash
+    # is absent (A2 A-6). Native Windows has no sh at all — it is tier C only
+    # through WSL2, so it gets the instruction instead of a confusing OSError.
+    if os.name == "nt":
+        say("gfti install: native Windows is not a supported host (A0 §2).")
+        say("  run install inside WSL2:  wsl -d Ubuntu -- sh bootstrap/install.sh")
+        say("  the CLI alone works natively:  pwsh -File bootstrap/gfti.ps1 --help")
+        return EXIT_ENV
+    say(f"gfti install: sh bootstrap/install.sh {' '.join(argv[2:])}".rstrip())
+    r = sh(["sh", str(script)], cwd=REPO, capture=False)
     return r.rc
 
 
@@ -1170,6 +1194,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.add_argument("--strict", action="store_true", help="treat warnings as failures")
     s.set_defaults(fn=cmd_doctor)
+
+    s = sub.add_parser("tier", help="report the A0 §2 OS tier (A/B/C) of this host")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_tier)
 
     s = sub.add_parser("logs", help="follow or tail service logs")
     s.add_argument("service", nargs="*", help="service names (default: all)")
