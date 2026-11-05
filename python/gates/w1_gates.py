@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
 TRAIN = REPO / "python" / "train"
@@ -260,8 +260,7 @@ def gate_artifact(artj: dict):
         "INSERT INTO d5.gate_w1 (gate, verdict, evidence) VALUES "
         f"('artifact', '{verdict}', '{evidence}') RETURNING gate;"
     )
-    ok = (ins_ok and ver_ok and tamper_resp and upd_ok
-          and "artifact" in recorded[1])
+    ok = ins_ok and ver_ok and tamper_resp and upd_ok and "artifact" in recorded[1]
     print(
         "W1-GATE-ARTIFACT "
         + json.dumps(
@@ -317,6 +316,10 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
         CELL_TICKS=str(ticks),
         CELL_DECIDE_EVERY="25",
         CELL_SUBJECT=f"market.spot.{symbol}",
+        # Gate-owned intent namespace (measured 2026-11-05): with the runtime
+        # profile up, the resident e7 (order.spot.>) consumed this replay's
+        # intents and signed fills with the container secret -> recon rc=9.
+        CELL_INTENT_PREFIX="order.w1",
     )
     w0b.run(w0b.BIN / "ledger_init", str(COMPOSE / "sql" / "001_d3_d4_init.sql"), env=e)
     # Reap orphans from earlier crashed runs BEFORE truncating: a leaked e7
@@ -324,8 +327,9 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
     # appending fills signed with a STALE per-run HMAC secret — recon then
     # fails rc=9 on mixed-secret fills.
     for stray in ("e7", "cell", "rail"):
-        subprocess.run(["pkill", "-f", f"target/release/{stray}"],
-                       capture_output=True, check=False)
+        subprocess.run(
+            ["pkill", "-f", f"target/release/{stray}"], capture_output=True, check=False
+        )
     w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
     w0b.run(w0b.BIN / "ledger_kill", "resolve", "L4", "W1-replay-open", env=e)
 
@@ -354,8 +358,13 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
 
     def _cell_pass(log: Path) -> None:
         with open(log, "w") as fh:
-            p = _spawn([str(w0b.BIN / "cell")], env=e, stdout=fh,
-                       stderr=subprocess.STDOUT, cwd=str(REPO))
+            p = _spawn(
+                [str(w0b.BIN / "cell")],
+                env=e,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                cwd=str(REPO),
+            )
             time.sleep(1.2)
             with open(feed) as feed_handle:
                 subprocess.run(
@@ -389,7 +398,7 @@ def gate_replay(symbol: str = "BTC", ticks: int = 250):
                 env=dict(
                     e,
                     E7_EXPECT=str(expected_intents),
-                    E7_SUBJECT="order.spot.>",
+                    E7_SUBJECT="order.w1.>",
                     LEDGER_SECRET_OWNER=secret,
                 ),
                 stdin=subprocess.DEVNULL,

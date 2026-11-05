@@ -61,7 +61,15 @@ fn main() {
         let _ = tx.send(None);
     });
 
-    let mut out = std::io::stdout().lock();
+    // NOT a held `StdoutLock`: a resident process has a heartbeat thread that also
+    // prints, and a lock held across this loop starves it forever (the rail's beat
+    // appeared only after shutdown — caught by the Compose healthcheck in A-2). One
+    // lock per row is free next to the publish-with-ack this loop already waits for.
+    fn emit(line: &str) {
+        let mut o = std::io::stdout().lock();
+        let _ = writeln!(o, "{line}");
+        let _ = o.flush();
+    }
     let mut accepted: u32 = 0;
     let mut rejected: u32 = 0;
     let tick = Duration::from_millis(tick_ms);
@@ -88,14 +96,14 @@ fn main() {
         }
         let f: Vec<&str> = line.split_whitespace().collect();
         if f.len() != 4 {
-            writeln!(out, "ERR fields(false=want symbol ts_nanos price rights)").ok();
+            emit("ERR fields(false=want symbol ts_nanos price rights)");
             rejected += 1;
             continue;
         }
         let (ts, price) = match (f[1].parse::<u64>(), f[2].parse::<f64>()) {
             (Ok(a), Ok(b)) => (a, b),
             _ => {
-                writeln!(out, "ERR parse(ts_nanos=nanos-since-epoch, price=float)").ok();
+                emit("ERR parse(ts_nanos=nanos-since-epoch, price=float)");
                 rejected += 1;
                 continue;
             }
@@ -124,23 +132,21 @@ fn main() {
                     format!("{} {} {}", r.ts_nanos, r.arrival_nanos, r.price).as_bytes(),
                 ) {
                     Ok(()) => {
-                        writeln!(
-                            out,
+                        emit(&format!(
                             "OK {} ts={} arr={} price={} rights={:?} pub=acked",
                             r.symbol, r.ts_nanos, r.arrival_nanos, r.price, r.rights
-                        )
-                        .ok();
+                        ));
                         accepted += 1;
                         hb.bump_events();
                     }
                     Err(e) => {
-                        writeln!(out, "ERR publish-fail({e}) — not stamped live").ok();
+                        emit(&format!("ERR publish-fail({e}) — not stamped live"));
                         rejected += 1;
                     }
                 }
             }
             Err(e) => {
-                writeln!(out, "ERR reject(reason={e:?})").ok();
+                emit(&format!("ERR reject(reason={e:?})"));
                 rejected += 1;
             }
         }
@@ -154,5 +160,4 @@ fn main() {
     eprintln!(
         "RAIL-SUMMARY {{\"accepted\":{accepted},\"rejected\":{rejected},\"stopped\":\"{stopped}\"}}"
     );
-    let _ = out.flush();
 }

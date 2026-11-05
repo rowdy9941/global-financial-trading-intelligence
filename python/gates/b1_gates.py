@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 COMPOSE = REPO / "compose"
 COLLECT = REPO / "python" / "collect"

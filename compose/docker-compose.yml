@@ -1,11 +1,60 @@
 name: gfti
 
-# W0a foundation stack (FULL-SYSTEM-BLUEPRINT §2.2).
+# W0a foundation stack (FULL-SYSTEM-BLUEPRINT §2.2) + the runtime profile (A2 §4 A-2).
 # Local-development credentials ONLY — production values come from env at deploy
 # time; these names/passwords are placeholders in a public repo by design.
+#
+# Profiles:
+#   (default)  the three stores: postgres · questdb · nats
+#   runtime    the three hot-path services: rail · cell · e7 (A-1 contract: they
+#              are resident processes, they heartbeat, and they exit 0 on SIGTERM)
+
+# Shared shape for the three hot-path services. One image, one build (see
+# runtime.Dockerfile), one restart policy, one healthcheck idiom.
+x-runtime-service: &runtime-service
+  profiles: ["runtime"]
+  image: gfti-runtime:local
+  build:
+    context: ..
+    dockerfile: compose/runtime.Dockerfile
+  # A service that dies must come back without a human. This is the whole point of
+  # A-1: before it, every service exited as soon as its fixture input ran out, so
+  # "restart" would have been a crash loop.
+  restart: unless-stopped
+  depends_on:
+    postgres:
+      condition: service_healthy
+    nats:
+      condition: service_healthy
+  environment:
+    # service-to-service names inside the compose network, never 127.0.0.1
+    LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
+    RAIL_NATS_URL: nats://nats:4222
+    # the dev owner secret; production reads an owner-side secret store (A0 §5)
+    LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
+    HEARTBEAT_MS: "1000"
+  healthcheck:
+    # "the beat is fresh", not "the pid exists" — see runtime.Dockerfile
+    test: ["CMD-SHELL", "test $(( $(date +%s) - $(stat -c %Y \"$$HEARTBEAT_FILE\") )) -le 5"]
+    interval: 5s
+    timeout: 3s
+    retries: 3
+    start_period: 15s
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  # A2 §4 item 7 asks for per-service CPU pinning. Deliberately NOT hardcoded here:
+  # Docker rejects a cpuset naming a core the host does not have, so a default of
+  # `0-1` would make the stack fail to start on a 2-core laptop — the portability
+  # A0 §2 requires. Pin with an owner override file (`cpuset: "2-3"`) on hosts that
+  # have the cores to spare; see docs/gates/RESIDENCY.md §6.
+
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: gfti
       POSTGRES_USER: gfti_app
@@ -22,6 +71,7 @@ services:
 
   questdb:
     image: questdb/questdb:7.4.2
+    restart: unless-stopped
     ports:
       - "127.0.0.1:9000:9000"   # REST/ILP HTTP
       - "127.0.0.1:9009:9009"   # ILP TCP
@@ -37,6 +87,7 @@ services:
 
   nats:
     image: nats:2.10-alpine
+    restart: unless-stopped
     command: ["--name", "gfti-nats", "-js", "-m", "8222"]
     ports:
       - "127.0.0.1:4222:4222"   # client
@@ -46,6 +97,53 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+
+  rail:
+    <<: *runtime-service
+    entrypoint: ["/usr/local/bin/rail"]
+    # Rail's input is stdin (A2 §3.1 P1). `stdin_open` keeps that descriptor OPEN
+    # with no writer: the reader thread blocks, the main loop idles and beats, and
+    # the container is healthy-but-idle instead of crash-looping on an instant EOF.
+    # A-10 replaces stdin with a socket/queue ingest; until then this is an honest
+    # "up and waiting for a producer", not a working feed.
+    stdin_open: true
+    environment:
+      LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
+      RAIL_NATS_URL: nats://nats:4222
+      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
+      HEARTBEAT_MS: "1000"
+      HEARTBEAT_FILE: /run/gfti/hb/rail.json
+      RAIL_TICK_MS: "200"
+
+  cell:
+    <<: *runtime-service
+    entrypoint: ["/usr/local/bin/cell"]
+    environment:
+      LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
+      RAIL_NATS_URL: nats://nats:4222
+      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
+      HEARTBEAT_MS: "1000"
+      HEARTBEAT_FILE: /run/gfti/hb/cell.json
+      # 0 = unbounded (A-1). Anything else keeps the bounded gate semantics.
+      CELL_TICKS: "0"
+      CELL_SUBJECT: ${CELL_SUBJECT:-market.spot.NIFTY}
+      CELL_DECIDE_EVERY: "50"
+      CELL_MAX_QTY: "10"
+      KILL_REFRESH_MS: "250"
+
+  e7:
+    <<: *runtime-service
+    entrypoint: ["/usr/local/bin/e7"]
+    environment:
+      LEDGER_URL: postgres://gfti_app:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/gfti
+      RAIL_NATS_URL: nats://nats:4222
+      LEDGER_SECRET_OWNER: ${LEDGER_SECRET_OWNER:-dev-local-runtime-owner}
+      HEARTBEAT_MS: "1000"
+      HEARTBEAT_FILE: /run/gfti/hb/e7.json
+      E7_SUBJECT: ${E7_SUBJECT:-order.spot.>}
+      E7_EXPECT: "0"
+      # a resident ledger cell refuses and continues; exiting 7 is the W0b drill pin
+      E7_REFUSE_EXIT: "0"
 
 volumes:
   pgdata:

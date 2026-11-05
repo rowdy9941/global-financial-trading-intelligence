@@ -36,7 +36,7 @@ import sys
 import time
 from pathlib import Path
 
-HERE = Path(__file__).parent
+HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 sys.path.insert(0, str(HERE))
 
@@ -181,9 +181,15 @@ def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
         CELL_TICKS=str(len(closes)),
         CELL_DECIDE_EVERY=str(DECIDE_EVERY),
         CELL_SUBJECT=subject,
+        # Gate-owned intent namespace (measured 2026-11-05): a resident e7 on
+        # `order.spot.>` consumes these intents and signs fills with its own
+        # secret, so recon fails rc=9 on a healthy spine.
+        CELL_INTENT_PREFIX="order.pilot",
     )
 
-    w0b.run(w0b.BIN / "ledger_init", str(w0b.COMPOSE / "sql" / "001_d3_d4_init.sql"), env=e)
+    w0b.run(
+        w0b.BIN / "ledger_init", str(w0b.COMPOSE / "sql" / "001_d3_d4_init.sql"), env=e
+    )
     _reap()
     w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
     w0b.run(w0b.BIN / "ledger_kill", "resolve", "L4", f"{pid}-fixture-open", env=e)
@@ -197,7 +203,8 @@ def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
         stamps = [base_ts + i * 86_400 * 1_000_000_000 for i in range(len(closes))]
     with open(feed, "w") as fh:
         fh.writelines(
-            f"{symbol} {ts} {px} public\n" for ts, px in zip(stamps, closes, strict=True)
+            f"{symbol} {ts} {px} public\n"
+            for ts, px in zip(stamps, closes, strict=True)
         )
 
     children: list[subprocess.Popen] = []
@@ -242,14 +249,16 @@ def run_pilot(pid: str, closes: list[float], real: dict | None = None) -> dict:
         s1 = _summary(SCRATCH / f"pilot_{pid}_cell1.log")
         expected = int(s1.get("intents_published", 0) or 0)
         if expected < 1:
-            raise RuntimeError(f"{pid}: fixture produced zero intents — gate cannot verify routing")
+            raise RuntimeError(
+                f"{pid}: fixture produced zero intents — gate cannot verify routing"
+            )
 
         w0b.psql_exec("TRUNCATE d4.fills; TRUNCATE d4.pnl_recon;")
         # A-1: E7 is resident; no "GO" handshake exists any more.
         with open(SCRATCH / f"pilot_{pid}_e7.log", "w") as e7log:
             p_e7 = _spawn(
                 [str(w0b.BIN / "e7")],
-                env=dict(e, E7_EXPECT=str(expected), E7_SUBJECT="order.spot.>"),
+                env=dict(e, E7_EXPECT=str(expected), E7_SUBJECT="order.pilot.>"),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=e7log,

@@ -52,6 +52,11 @@ fn main() {
     let nats_url =
         std::env::var("RAIL_NATS_URL").unwrap_or_else(|_| "nats://127.0.0.1:4222".into());
     let subject = std::env::var("CELL_SUBJECT").unwrap_or_else(|_| "market.spot.NIFTY".into());
+    // Intent namespace. Default is the production shape `order.spot.<SYM>`; a gate
+    // or a second strategy sets `CELL_INTENT_PREFIX` so its intents are invisible to
+    // the resident E7 (which subscribes `order.spot.>`), instead of sharing a subject
+    // space with a live service and having both sign fills into the same table.
+    let intent_prefix = std::env::var("CELL_INTENT_PREFIX").unwrap_or_else(|_| "order.spot".into());
     let ticks_want: u64 = std::env::var("CELL_TICKS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -192,7 +197,7 @@ fn main() {
                         // it never "drops a decision"
                         let order_sym = subject.rsplit('.').next().unwrap_or("X").to_string();
                         if let Err(e) = nats.publish(
-                            &format!("order.spot.{order_sym}"),
+                            &format!("{intent_prefix}.{order_sym}"),
                             intent.payload.as_bytes(),
                         ) {
                             eprintln!("cell: E6 publish fail (fail-closed): {e}");

@@ -286,17 +286,63 @@ item 5 on purpose (`kill` needs a DB round trip inside a liveness printer; see
 [RESIDENCY](../gates/RESIDENCY.md) §2). Fence: `python/gates/rt_gates.py`, part of
 `G-ENGINE`. Evidence: [RESIDENCY](../gates/RESIDENCY.md) §3.
 
-**A-2 · Runtime profile in Compose**
+**A-2 · Runtime profile in Compose** — **DONE 2026-11-05**
 7. Add `rail`, `cell`, `e7` as Compose services on a `runtime` profile with
    `restart: unless-stopped`, `depends_on: {condition: service_healthy}`, CPU pinning per the
    blueprint's council fix A2.
 8. Add `restart: unless-stopped` to postgres/questdb/nats.
 9. Gate: `docker kill` each service → it returns healthy within N seconds, recorded.
 
-**A-3 · `gfti` CLI** (one entry point, shells that already exist stay as implementation details)
+Delivered: one image (`compose/runtime.Dockerfile`, multi-stage, non-root, no toolchain in
+the runtime layer), the `runtime` profile with the three services on `restart:
+unless-stopped` + `depends_on: service_healthy`, `restart` added to the three stores, and
+`HEARTBEAT_*`/`HEARTBEAT_FILE` so a **container healthcheck reads a fresh beat** instead of
+asking whether a pid exists. Two corrections to item 9/7 recorded rather than glossed:
+**`docker kill` is not a restart primitive** — Docker treats `kill` and `stop` as manual
+stops and the policy does not apply (measured: killed container stayed `exited` with
+restarts 0, while a natural exit in the same setup restarted with restarts 1), so the gate
+proves supervision with a daemon probe plus `docker stop`/`docker start` into `healthy`;
+and **CPU pinning is not hardcoded**, because a cpuset naming a core the host lacks makes
+the stack fail to start on a 2-core laptop — the portability A0 §2 requires. Pin via an
+owner override file. The profile also caught a real bug: `rail` held a `StdoutLock` across
+its loop, which starved the heartbeat thread until shutdown (the beat only appeared after
+`RAIL-SUMMARY`); it now locks per row. Evidence: [RESIDENCY](../gates/RESIDENCY.md) §6.
+
+**A-3 · `gfti` CLI** — **DONE 2026-11-05**
 10. `gfti install` (wraps the installer), `up`, `down`, `status`, `doctor`, `logs`, `smoke`.
 11. `gfti doctor` = prerequisite + port + tier probe (see A-6).
 12. Gate: every action in the blueprint's workflow list is reachable from `gfti` alone.
+
+Delivered: `python/gfti/cli.py` (stdlib only — an installer cannot require the toolchain
+it installs), `bootstrap/gfti` (POSIX `sh`; resolves its own symlink chain, so `install.sh`
+links it into `~/.local/bin` and a `git pull` updates the command), `python/gates/cli_gates.py`
+(7 cases, part of `G-INSTALL`), and `install.sh --tier=A|B|C` (asserted, refused on
+mismatch, rather than parsed and ignored — item 11's probe half; the tier *matrix* is A-6).
+Item 10 said seven verbs; three more were added because item 12 cannot be honest without
+them: `verify` (re-run the gate suite — WORKFLOW 4's "CI gates rerun"), `ingest`/`research`
+(the only routes to WORKFLOW 1 and 2/5), `kill` (WORKFLOW 8), and `workflows`, a table of
+the blueprint's eight workflows → verb → status. Status is a claim about the tree, not the
+design: **4 ready, 2 partial, 2 missing** — `swarm` and `cockpit` exit **3** and name their
+gap. There is no pretend path and no exit-0 no-op. Exit codes are the contract
+(`0 ok · 1 failed · 2 environment · 3 not implemented`) and the gate asserts on them.
+
+Two bugs found by building the front door, both fixed:
+
+* **Gates were cwd-relative.** `w0b_gates.py` computed `REPO` from `Path(__file__).parent`
+  without `.resolve()`, so invoked as `../gates/w0b_gates.py` it looked for
+  `python/train/compose/.env`. Six gate files had the same shape; all now resolve.
+* **The A-2 runtime profile poisoned `G-ENGINE`.** With `cell` (subscribed
+  `market.spot.NIFTY`) and `e7` (subscribed `order.spot.>`) resident, the gate's own ticks
+  and intents were consumed **twice**: the resident pair signed fills with the container's
+  secret, so `ledger_recon` reported `bad_sigs: 8` for a healthy engine and `G-ENGINE` went
+  red. A gate must not share a subject space with a live service. `cell` gained
+  `CELL_INTENT_PREFIX` (default `order.spot`, the production shape); gates now use
+  `order.w0b.>` / `order.rtgate.>` and a `W0BNIFTY` symbol the resident services do not
+  subscribe to. Evidence: [RESIDENCY](../gates/RESIDENCY.md) §8.
+
+Evidence (verbatim):
+`SUMMARY {"DOCTOR": true, "HELP": true, "REFUSE": true, "SHIM": true, "SMOKE": true, "STATUS": true, "WF": true, "ok": true}`
+
 
 **A-4 · One config file**
 13. `configs/gfti.toml` — services, ports, paths, DB DSNs, engine env, subject prefix, log level,

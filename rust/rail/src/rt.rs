@@ -90,6 +90,30 @@ struct Beat {
     beats: AtomicU64,
 }
 
+/// `HEARTBEAT_FILE` from the environment — where the latest beat is mirrored for
+/// a container healthcheck. Absent/empty = stdout only.
+fn heartbeat_file() -> Option<std::path::PathBuf> {
+    std::env::var("HEARTBEAT_FILE")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// Write the beat atomically (tmp + rename) so a reader never sees half a line.
+fn persist(path: &std::path::Path, json: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension("json.tmp");
+    // Parent perms are the container's problem; creating it here keeps the
+    // "just set the env var" path working outside Docker too.
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut body = String::with_capacity(json.len() + 1);
+    body.push_str(json);
+    body.push('\n');
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, path)
+}
+
 /// A heartbeat thread. Dropping it stops and joins the thread, so a service that
 /// returns from `main` never leaves a printer behind.
 pub struct Heartbeat {
@@ -114,6 +138,7 @@ impl Heartbeat {
     /// [`Heartbeat::start`] with an explicit version string.
     pub fn start_v(svc: &str, version: &str, interval_ms: u64) -> Heartbeat {
         let enabled = interval_ms > 0;
+        let path = heartbeat_file();
         let state = Arc::new(Beat {
             svc: svc.to_string(),
             version: version.to_string(),
@@ -133,6 +158,7 @@ impl Heartbeat {
                 // Sleep in small slices so Drop joins promptly and a shutdown
                 // signal is observed without waiting a whole interval.
                 let slice = Duration::from_millis(25);
+                let mut write_warned = false;
                 loop {
                     let mut slept = Duration::ZERO;
                     while slept < st.interval {
@@ -146,8 +172,8 @@ impl Heartbeat {
                         return;
                     }
                     let n = st.beats.fetch_add(1, Ordering::Relaxed) + 1;
-                    println!(
-                        "HB {{\"svc\":\"{}\",\"version\":\"{}\",\"beat\":{},\"uptime_s\":{},\"events\":{},\"decisions\":{},\"intents\":{}}}",
+                    let json = format!(
+                        "{{\"svc\":\"{}\",\"version\":\"{}\",\"beat\":{},\"uptime_s\":{},\"events\":{},\"decisions\":{},\"intents\":{}}}",
                         st.svc,
                         st.version,
                         n,
@@ -156,7 +182,22 @@ impl Heartbeat {
                         st.decisions.load(Ordering::Relaxed),
                         st.intents.load(Ordering::Relaxed),
                     );
+                    println!("HB {json}");
                     let _ = std::io::stdout().flush();
+                    // Optional on-disk copy (A-2). A container healthcheck cannot
+                    // read its own stdout, so `HEARTBEAT_FILE` is what turns the
+                    // beat into a health signal: "the file is fresh" is a much
+                    // stronger claim than "the process exists".
+                    if let Some(p) = &path
+                        && let Err(e) = persist(p, &json)
+                        && !write_warned
+                    {
+                        eprintln!(
+                            "hb: cannot write {}: {e} — healthchecks will not see this service",
+                            p.display()
+                        );
+                        write_warned = true;
+                    }
                 }
             }))
         } else {
