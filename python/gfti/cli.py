@@ -1032,6 +1032,60 @@ def collectors() -> list:
     )
 
 
+def cmd_d2(args) -> int:
+    """D2 = JetStream, applied and read back (A2 A-8 items 27/30).
+
+    `apply` is convergent: the config is the definition, so an existing stream is
+    updated to match rather than assumed correct. `status` is the other direction —
+    what the server holds, compared with what the file declares, because "declared"
+    and "exists" are different facts and D2 shipped for months with zero streams.
+    """
+    try:  # same dual import shape as gfti_config above
+        import d2
+    except ImportError:  # pragma: no cover - package import path
+        from . import d2
+
+    try:
+        cfg = gcfg.load()
+        if args.action == "apply":
+            out = d2.apply(cfg)
+        else:
+            out = d2.status(cfg)
+    except (gcfg.ConfigError, d2.D2Error, OSError) as e:
+        say(f"gfti d2 {args.action}: {e}")
+        return EXIT_ENV
+
+    if args.json:
+        _json_out(out)
+        return EXIT_OK if out.get("ok") else EXIT_FAIL
+
+    if args.action == "apply":
+        say(
+            f"D2 apply: {len(out['streams_created'])} created, "
+            f"{len(out['streams_updated'])} updated, "
+            f"{len(out['streams_existing'])} already present"
+        )
+        say("declared: " + ", ".join(out["declared_streams"]))
+        say("consumers: " + ", ".join(out["consumers"]))
+        return EXIT_OK
+
+    say(f"{'STREAM':<10}{'MSGS':>10}{'BYTES':>14}  SUBJECTS")
+    for name, info in out["streams"].items():
+        if not info.get("exists"):
+            say(f"{name:<10}{'-':>10}{'-':>14}  MISSING")
+            continue
+        say(
+            f"{name:<10}{info['messages']:>10}{info['bytes']:>14}  "
+            + " ".join(info["subjects"])
+        )
+    for name, info in out["consumers"].items():
+        state = "present" if info.get("exists") else "MISSING"
+        say(f"consumer {name}: {state} (pending {info.get('pending', 0)})")
+    for problem in out["problems"]:
+        say(f"problem: {problem}")
+    return EXIT_OK if out["ok"] else EXIT_FAIL
+
+
 def cmd_ingest(args) -> int:
     available = collectors()
     if args.source not in available:
@@ -1259,6 +1313,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--install", action="store_true", help="include G-INSTALL (slow)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_verify)
+
+    s = sub.add_parser(
+        "d2", help="JetStream streams: apply the declaration, read it back"
+    )
+    s.add_argument("action", choices=["apply", "status"])
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_d2)
 
     s = sub.add_parser("ingest", help="WORKFLOW 1 — run a collector")
     s.add_argument("source", help="collector name, e.g. hyperliquid_daily")

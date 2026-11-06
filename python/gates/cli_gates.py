@@ -48,6 +48,8 @@ CORE_VERBS = (
     "logs",
     "smoke",
     "config",
+    # A-8: D2 is applied and inspected through the one front door, not by hand.
+    "d2",
     "verify",
     "ingest",
     "research",

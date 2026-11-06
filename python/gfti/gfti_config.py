@@ -58,6 +58,10 @@ SCHEMA = {
     "stores.nats_url_host": (str, "NATS URL as seen from the host"),
     "subjects.market": (str, "market data subject prefix"),
     "subjects.intent": (str, "order intent prefix (cell publishes, e7 subscribes)"),
+    "subjects.signal": (str, "E2 signal prefix (cell publishes)"),
+    "subjects.risk": (str, "E5 verdict prefix (cell publishes)"),
+    "subjects.ledger": (str, "signed fill prefix (e7 publishes)"),
+    "subjects.seat": (str, "seat lifecycle prefix (cell publishes)"),
     "subjects.kill_refresh_ms": (int, "how often a cell re-reads the kill ladder"),
     "runtime.railtick_ms": (int, "rail idle poll interval"),
     "runtime.heartbeat_ms": (int, "heartbeat period for all three services"),
@@ -192,6 +196,10 @@ def compose_env(cfg: dict) -> dict:
     """
     intent = value(cfg, "subjects.intent")
     market = value(cfg, "subjects.market")
+    signal = value(cfg, "subjects.signal")
+    risk = value(cfg, "subjects.risk")
+    ledger = value(cfg, "subjects.ledger")
+    seat = value(cfg, "subjects.seat")
     symbol = value(cfg, "runtime.cell.symbol")
     return {
         "POSTGRES_PORT": str(value(cfg, "stores.postgres_port")),
@@ -208,6 +216,10 @@ def compose_env(cfg: dict) -> dict:
         "CELL_SUBJECT": f"{market}.{symbol}",
         "CELL_INTENT_PREFIX": intent,
         "E7_SUBJECT": f"{intent}.>",
+        "CELL_SIGNAL_PREFIX": signal,
+        "CELL_RISK_PREFIX": risk,
+        "CELL_SEAT_PREFIX": seat,
+        "E7_LEDGER_PREFIX": ledger,
         "HEARTBEAT_MS": str(value(cfg, "runtime.heartbeat_ms")),
         "RAIL_TICK_MS": str(value(cfg, "runtime.railtick_ms")),
         "CELL_TICKS": str(value(cfg, "runtime.cell.ticks")),

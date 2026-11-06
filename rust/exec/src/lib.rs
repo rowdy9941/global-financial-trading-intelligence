@@ -71,15 +71,23 @@ pub fn client_order_id(seat: &str, discriminator: &str, decision_id: u64) -> u64
     h.finish()
 }
 
-/// E6 intent payload — THE format owner (engine re-exports as
-/// `engine::intent_payload`; cell + E7 keep their exact wire behavior).
+/// E6 intent payload — the one wire line E7 consumes.
+///
+/// The *format* is not defined here: `rail::payload` is the single versioned
+/// envelope codec (invariant R6), so this function cannot drift from the decoder
+/// that reads it. Two definitions of one wire format is how a publisher and its
+/// subscriber silently disagree.
 pub fn intent_payload(side: &Action, qty: f64, px: f64, decision_id: u64) -> String {
-    let side = match side {
-        Action::Buy => "buy",
-        Action::Sell => "sell",
-        Action::None => "hold",
-    };
-    format!("{side} {qty:.8} {px:.8} {decision_id}")
+    rail::payload::encode_intent(&rail::payload::Intent {
+        side: match side {
+            Action::Buy => "buy".into(),
+            Action::Sell => "sell".into(),
+            Action::None => "hold".into(),
+        },
+        qty,
+        px,
+        decision_id,
+    })
 }
 
 /// Static routing config; `State::new` validates it fail-closed.
@@ -203,15 +211,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn payload_format_is_the_e6_wire_contract() {
-        assert_eq!(
-            intent_payload(&Action::Buy, 1.0, 1.5, 7),
-            "buy 1.00000000 1.50000000 7"
-        );
-        assert_eq!(
-            intent_payload(&Action::Sell, 0.25, 67944.0, 42),
-            "sell 0.25000000 67944.00000000 42"
-        );
+    fn payload_is_a_versioned_envelope_that_round_trips() {
+        for (side, qty, px, dec) in [
+            (Action::Buy, 1.0, 1.5, 7),
+            (Action::Sell, 0.25, 67944.0, 42),
+        ] {
+            let s = intent_payload(&side, qty, px, dec);
+            assert!(s.starts_with("{\"v\":1,\"kind\":\"intent\","), "{s}");
+            let back = rail::payload::decode_intent(&s).expect("decode our own payload");
+            assert_eq!(back.qty, qty);
+            assert_eq!(back.px, px);
+            assert_eq!(back.decision_id, dec);
+        }
     }
 
     #[test]
@@ -239,7 +250,7 @@ mod tests {
             client_order_id("s1", "sma-cross", 7)
         );
         assert_eq!(intent.px, 1.5);
-        assert_eq!(intent.payload, "buy 1.00000000 1.50000000 7");
+        assert!(intent.payload.starts_with("{\"v\":1,\"kind\":\"intent\""));
         assert_eq!(intent.payload, intent_payload(&Action::Buy, 1.0, 1.5, 7));
         assert_eq!(st.in_flight(), 1);
     }

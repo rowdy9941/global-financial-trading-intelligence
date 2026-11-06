@@ -39,22 +39,30 @@ fn main() {
             exit(2);
         }
         got += 1;
+        // transit = now − arrival, decoded from the v1 envelope. This used to
+        // split whitespace; when the payload became versioned that silently
+        // produced an empty transit vector, and the percentile read below would
+        // then index an empty slice. Decode, or say why.
+        // Stamp the clock BEFORE decoding: transit is wire time, and a subscriber
+        // that bills its own parser to the bus reports a latency it invented
+        // (measured: parsing the envelope this way pushed the fan-out p99 against
+        // its 2 ms budget).
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
         let line = String::from_utf8_lossy(&payload);
-        // payload = "ts arrival price" — transit = now − arrival
-        if let Some(arr) = line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            transits.push(now.saturating_sub(arr));
+        match rail::payload::decode_tick(&line) {
+            Ok(t) => transits.push(now.saturating_sub(t.arrival_nanos)),
+            Err(e) => eprintln!("sub: refusing payload ({e})"),
         }
     }
     transits.sort_unstable();
     let n = transits.len();
+    if n == 0 {
+        eprintln!("WIRE-E2E {{\"received\":{got},\"n\":0,\"error\":\"no decodable payload\"}}");
+        exit(2);
+    }
     let avg = transits.iter().sum::<u64>() / n.max(1) as u64;
     let p50 = transits[(n as f64 * 0.50) as usize % n.max(1)];
     let p99 = transits[(n as f64 * 0.99) as usize % n.max(1)];

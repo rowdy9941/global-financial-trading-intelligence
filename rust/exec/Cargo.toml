@@ -13,6 +13,10 @@ edition.workspace = true
 
 [dependencies]
 govern = { path = "../govern" }
+# The intent wire format is a versioned envelope (invariant R6) and the envelope
+# codec lives in one place: `rail::payload`. exec used to own a whitespace string
+# of its own, which made two format definitions for one wire contract.
+rail = { path = "../rail" }
 
 [dev-dependencies]
 evaluate = { path = "../evaluate" }

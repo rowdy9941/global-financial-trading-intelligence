@@ -78,11 +78,15 @@ fn signed_artifact_drives_features_governance_and_routing() {
     let Routed::Publish(intent) = routed else {
         panic!("paper mode must publish")
     };
-    assert_eq!(
-        intent.payload,
-        format!("buy 1.00000000 {:.8} 1", last_px),
-        "E6 payload must be the canonical wire line"
-    );
+    // The wire line is a versioned envelope and the codec that owns it is
+    // `rail::payload` — so the assertion decodes instead of hard-coding a format
+    // string that a second implementation could drift from.
+    let wire = rail::payload::decode_intent(&intent.payload)
+        .expect("E6 payload must decode under the v1 envelope");
+    assert_eq!(wire.side, "buy");
+    assert_eq!(wire.qty, 1.0);
+    assert_eq!(wire.px, last_px);
+    assert_eq!(wire.decision_id, 1);
     assert_eq!(st.in_flight(), 1);
 
     // Idempotency across the whole spine: replaying the same decision refuses

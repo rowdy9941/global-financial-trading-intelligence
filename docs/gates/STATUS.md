@@ -42,9 +42,9 @@ A gate failure that leaves no trace is not actionable, so the files are never di
 
 | # | Gate | Verdict | Evidence |
 |---|---|---|---|
-| 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs · `gfti` CLI contract 7/7, 14 verbs (`cli_gates.py`, A2 A-3) · one-config contract 6/6 (`config_gates.py`, A2 A-4): `CONFIG` `RENDER` `PIVOT` `PARITY` `SECRETS` `DOCTOR` — a `:-` fallback or a bare `${VAR}` turns `RENDER` red · health view 3/3 (`health_gates.py`, A2 A-5): `FIELDS` `STALE` `HONEST` — `docker pause` on a live service turns the view red, names it and exits non-zero, then recovers on `unpause` · cross-OS install 5/5 (`tier_gates.py`, A2 A-6): `PROBE` `POSIX` `PS1` `CIOS` `ENCODING` — `POSIX` runs the installer on a PATH holding only a shell and python, so a bash-ism or a missing-tool message that stops at the first gap fails it; `ENCODING` runs three verbs under `PYTHONIOENCODING=cp1252` and `ascii`, which is how the Windows console crash is reproduced on tier A |
-| 2 | **G-STORE** | `OK` | 7 migrations applied twice, no error · append-only · 10× restart · sign-recon · rail-only-writer 4/4 (`r1_gates.py`, A2 A-7): `INGEST` `REFUSE` `DECLARED` `DOCTOR` — `REFUSE` is a negative test (registration without a rail receipt must fail), `DECLARED` proves `d3.v_r1_violations` flags an undeclared write inside a rolled-back transaction rather than being empty by accident · `d1_gates.py ALL` |
-| 3 | **G-RAIL** | `OK` | `cargo test -p rail` 9 passed · FANOUT **p99 1.61 ms vs 2.00 ms**, p50 310 µs, subs ready 54 ms, 20,000/20,000 rows |
+| 1 | **G-INSTALL** | `OK` | `install.sh --verify` ×2 — two consecutive runs · `gfti` CLI contract 7/7, 15 verbs (`cli_gates.py`, A2 A-3 + A-8's `d2`) · one-config contract 6/6 (`config_gates.py`, A2 A-4): `CONFIG` `RENDER` `PIVOT` `PARITY` `SECRETS` `DOCTOR` — a `:-` fallback or a bare `${VAR}` turns `RENDER` red · health view 3/3 (`health_gates.py`, A2 A-5): `FIELDS` `STALE` `HONEST` — `docker pause` on a live service turns the view red, names it and exits non-zero, then recovers on `unpause` · cross-OS install 5/5 (`tier_gates.py`, A2 A-6): `PROBE` `POSIX` `PS1` `CIOS` `ENCODING` — `POSIX` runs the installer on a PATH holding only a shell and python, so a bash-ism or a missing-tool message that stops at the first gap fails it; `ENCODING` runs three verbs under `PYTHONIOENCODING=cp1252` and `ascii`, which is how the Windows console crash is reproduced on tier A |
+| 2 | **G-STORE** | `OK` | 7 migrations applied twice, no error · append-only · 10× restart · sign-recon · rail-only-writer 4/4 (`r1_gates.py`, A2 A-7): `INGEST` `REFUSE` `DECLARED` `DOCTOR` — `REFUSE` is a negative test (registration without a rail receipt must fail), `DECLARED` proves `d3.v_r1_violations` flags an undeclared write inside a rolled-back transaction rather than being empty by accident · **D2 is a store 4/4 (`d2_gates.py`, A2 A-8): `STREAMS` `VERSION` `REPLAY` `CONSUMERS`** — `STREAMS` reads the server (`/jsz streams=6`) *and* proves all six publisher namespaces resolve to a declared stream while an undeclared one does not; `VERSION` drives a real cell and requires 2×v2 refused / 3×v1 accepted; `REPLAY` reads 60 retained messages twice and requires identical decisions with `e12_ns`/`tunix_ms` stripped · `d1_gates.py ALL` A–E |
+| 3 | **G-RAIL** | `FAIL` (capacity, escalated) | `cargo test -p rail` 26 passed across 9 targets · FANOUT: best-of-3 passes at load1 ≤ 4 (`1.908 ms`, p50 398 µs) and fails 3/3 at load1 ≥ 4.9 (`2.085 / 2.356 / 2.138 ms`). **The 2.00 ms budget is unchanged and not relaxed here** — see [Gate 3](#gate-3--fanout-is-the-marginal-gate-and-it-is-measured-not-asserted) and A2 B7 for the owner decision this needs |
 | 4 | **G-ENGINE** | `OK` | ENGINE · kill cascade · residency (`rt_gates.py` 6/6 incl. COMPOSE supervision) · `cargo test -p exec` 11 passed |
 | 5 | **G-DATA** | `blocked` | capture green; D3 `BTC-USDC/1m` = 6,337 rows, **`BTC-USDC/1d` = 1,347 (native)**, `BTC-USDC/1d-derived` = 3, `BTC-USD/1d` = 1,346, `BTC-USDC/tick` = 199,998 (rail-written) — blocked only by the Kraken archive |
 | 6 | **G-RESEARCH** | `OK` | `w1_gates.py ALL` all cases true |
@@ -94,6 +94,39 @@ recorded in the verdict so the wait is visible.
 
 Result: **3/3 green**, p99 **1.50 / 1.55 / 1.60 ms**, p50 316–353 µs, subscribers
 ready in 8–10 ms.
+
+### 2026-11-06 — the remaining variance is capacity, and it is escalated, not relaxed
+
+A-8 was the first change since that recording that could plausibly have moved the
+pin (it put a versioned codec on both ends of the wire and made `market.>` a
+durable store's subject space), so it was cleared by measurement rather than
+assumption:
+
+| Question | Measurement |
+|---|---|
+| Does D2 persistence inflate the pin? | **No.** A/B/A/B with the MARKET stream deleted vs present, alternating: captured `3.51 / 1.93` and `1.98 ms`; uncaptured `1.93` and `2.07 / 1.72 ms`. Uncapped runs crossed 2 ms too. |
+| Does the new codec cost the latency? | **No.** 112-byte tick, release build: encode **0.83 µs**, decode **3.36 µs**. Two orders of magnitude below the p50 it would have to explain. |
+| What does? | **CPU.** Same binaries, `1.908 ms` (attempt 1) at load1 3.67; `2.085 / 2.356 / 2.138 ms` (3/3 fail) at load1 4.95 immediately after `d1_gates.py ALL`'s ten QuestDB restarts; `1.934 ms` on attempt 1 with the three idle hot-path containers stopped. |
+
+The floor on this box has drifted from the recorded 1.50–1.60 ms to ~1.85–1.95 ms,
+leaving about 5% of headroom under 2.00 ms. Two things were fixed in the *Drill*,
+in the same spirit as the 2026-11-04 startup-race fix — neither touches the budget:
+
+- **Settle the load first** (bounded, 120 s). A p99 is a *queueing* statistic, so
+  measuring it while another gate's drill has the CPU oversubscribed measures the
+  host. The wait and the load it settled at are printed (`settle`).
+- **A reported, unscored warm-up pass** (10% of the payload). The first burst after
+  an idle period pays page-cache faults on freshly exec'd binaries and the CPU
+  governor's ramp — measured 2.307 ms first, 1.911 ms second, same code two seconds
+  apart at load1 1.77. Every *scored* attempt still has to pass, and the warm-up's
+  own numbers are printed in `warmup` rather than discarded silently.
+
+One more consequence, recorded because it is a defect fixed: the bench now publishes
+to `bench.market.spot.*` instead of `market.spot.bench.*`. Once MARKET declared
+`market.>`, every FANOUT run wrote its 20,000 synthetic rows into the durable store
+(`/jsz` messages 565 → 40,565) and made `gfti d2 status` counters meaningless — the
+same rule as A0's "a gate must not share a subject space with a live service".
+Capture is proven by `d2_gates.py STREAMS`, not by polluting the store.
 
 Three things follow, and all of them are now encoded rather than remembered:
 

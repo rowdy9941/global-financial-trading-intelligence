@@ -8,6 +8,7 @@
 //! can exist — std has no signal API. No `unwrap`/`panic` in library paths.
 
 pub mod ilp;
+pub mod payload;
 pub mod rt;
 pub mod wire;
 

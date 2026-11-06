@@ -336,6 +336,7 @@ dependencies = [
  "evaluate",
  "featurize",
  "govern",
+ "rail",
 ]
 
 [[package]]

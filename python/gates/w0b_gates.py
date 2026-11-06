@@ -275,6 +275,36 @@ def _await_subscriptions(subjects: set[str], timeout_s: float = 30.0) -> float:
     )
 
 
+def _settle_load(budget_s: float = 120.0, threshold: float | None = None) -> dict:
+    """Wait (bounded) for the box to stop being oversubscribed before measuring.
+
+    Not a budget change and not a sleep standing in for a state: the p99 this gate
+    asserts is a *queueing* statistic, so measuring it while another gate's drill has
+    the CPU oversubscribed measures the host, not the wire. Measured 2026-11-06 on this
+    4-core box: FANOUT immediately after `d1_gates.py ALL` (ten QuestDB restarts)
+    scored 2.08/2.09/2.14 ms at load1 4.95 — three attempts, all fail; the same
+    binaries at load1 3.67 scored 1.91 ms on the first attempt, p50 398 us (vs 450 us
+    loaded). The 2.00 ms budget is unchanged: this only stops the gate from
+    inheriting contention it did not create.
+    """
+    cpus = os.cpu_count() or 1
+    limit = threshold if threshold is not None else float(cpus)
+    t0 = time.monotonic()
+    load1 = 0.0
+    while time.monotonic() - t0 < budget_s:
+        load1 = os.getloadavg()[0] if hasattr(os, "getloadavg") else 0.0
+        if load1 <= limit:
+            break
+        time.sleep(2.0)
+    waited = time.monotonic() - t0
+    return {
+        "waited_ms": round(waited * 1000),
+        "load1_at_measure": round(load1, 2),
+        "threshold": limit,
+        "settled": load1 <= limit,
+    }
+
+
 def _fanout_once(n_total: int, specs: list, tag: str) -> dict:
     """One fan-out pass: subscribe, publish through rail, read per-cell transit."""
     procs, logs = [], []
@@ -359,11 +389,19 @@ def gate_fanout():
     """
     n_total = 20000
     per = n_total // 4
-    # Gate-owned namespace. The resident `cell` subscribes to market.spot.NIFTY, so
-    # measuring with it as a co-tenant measured the live stack, not the rail.
-    # Same rule the pilot gate learned for intents: a gate must not share a subject
-    # space with a live service.
-    base = CFG_ENV.get("MARKET_PREFIX", "market.spot") + ".bench"
+    # Gate-owned namespace, OUTSIDE `market.>` on purpose. The resident `cell`
+    # subscribes to market.spot.NIFTY, so measuring with it as a co-tenant measured
+    # the live stack, not the rail — the rule the pilot gate learned for intents.
+    # A-8 extends the same rule to D2: once a MARKET stream declared `market.>`, the
+    # bench co-tenanted the *store*, so every FANOUT run landed 20,000 synthetic rows
+    # in the durable D2 store (measured: /jsz messages 565 → 40,565 across two
+    # attempts) and made `gfti d2 status` message counts unreadable.
+    # Capture is NOT what this pin measures — a controlled A/B/A/B on 2026-11-06
+    # (stream present vs deleted, alternating) gave p99 3.51/1.93 ms captured vs
+    # 1.93 ms and 2.07/1.72 ms uncaptured: the tail is host scheduling, not
+    # persistence. So the wire is measured here, capture is proven by d2_gates
+    # STREAMS/REPLAY, and the store's counters stay about real data.
+    base = "bench." + CFG_ENV.get("MARKET_PREFIX", "market.spot")
     specs = [
         (f"{base}.NIFTY", per),
         (f"{base}.BTC_USDT", per),
@@ -371,6 +409,15 @@ def gate_fanout():
         (f"{base}.>", n_total),
     ]
     budget = 2_000_000
+    settle = _settle_load()
+    # Warm-up pass, reported but not scored: the first burst after an idle period
+    # pays page-cache faults on the freshly exec'd binaries and the CPU governor's
+    # ramp (measured 2026-11-06: first attempt 2.307 ms, second 1.911 ms, on the
+    # same code two seconds apart at load1 1.77). A p99 budget is a steady-state
+    # claim; discarding the warm-up silently would be dishonest, so its numbers are
+    # printed in `warmup` and every *scored* attempt still has to pass.
+    warm_specs = [(subj, max(1, cnt // 10)) for subj, cnt in specs]
+    warm = _fanout_once(n_total // 10, warm_specs, "warm")
     attempts, best = [], None
     for attempt in range(1, 4):
         got = _fanout_once(n_total, specs, f"a{attempt}")
@@ -407,6 +454,12 @@ def gate_fanout():
                 "budget_ns": budget,
                 "attempts": attempts,
                 "attempt_used": (best or attempts[-1])["attempt"],
+                "settle": settle,
+                "warmup": {
+                    "rows": n_total // 10,
+                    "worst_p99_ns": warm["worst_p99_ns"],
+                    "accepted": warm["summary"].get("accepted"),
+                },
                 "host": {"cpus": os.cpu_count(), "load1": load[0]},
                 "ok": best is not None,
             }

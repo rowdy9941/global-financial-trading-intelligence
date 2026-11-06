@@ -299,7 +299,13 @@ def gate_e7() -> bool | None:
     try:
         # wait for the heartbeat, which is emitted only after subscribe+connect
         ready = svc.wait_for("HB ", 1, 15.0)
-        _nats_pub("order.rtgate.RTGATE", "buy 1 100.5 900001")
+        # The intent wire format is the v1 envelope (`rail::payload::encode_intent`),
+        # not the old whitespace line: a gate that keeps writing the old shape would
+        # pass while proving nothing about the payload a real cell emits.
+        _nats_pub(
+            "order.rtgate.RTGATE",
+            '{"v":1,"kind":"intent","side":"buy","qty":1,"px":100.5,"dec":900001}',
+        )
         filled = svc.wait_for("LEDGER-E7-FILL", 1, 15.0)
         rc, ms = svc.stop()
         lines = svc.lines()

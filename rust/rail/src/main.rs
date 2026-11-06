@@ -191,7 +191,13 @@ fn main() {
                 // row; only after that do we report OK.
                 match nats.publish(
                     &format!("{prefix}.{}", r.symbol),
-                    format!("{} {} {}", r.ts_nanos, r.arrival_nanos, r.price).as_bytes(),
+                    rail::payload::encode_tick(&rail::payload::Tick {
+                        symbol: r.symbol.to_string(),
+                        ts_nanos: r.ts_nanos,
+                        arrival_nanos: r.arrival_nanos,
+                        price: r.price,
+                    })
+                    .as_bytes(),
                 ) {
                     Ok(()) => {
                         emit(&format!(

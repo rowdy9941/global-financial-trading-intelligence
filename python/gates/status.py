@@ -534,6 +534,13 @@ def build(full: bool, install: bool) -> list[Gate]:
         gate_runner("r1_gates.py")
         if full
         else Part(label="r1_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN),
+        # A-8: D2 is a store, not an assumption. STREAMS proves every declared stream
+        # exists with its subjects AND that each live publisher namespace resolves to
+        # one; VERSION proves a v2 payload is refused by the running cell; REPLAY
+        # proves the same retained bytes decide the same way twice.
+        gate_runner("d2_gates.py")
+        if full
+        else Part(label="d2_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN),
         gate_runner("d1_gates.py")
         if full
         else Part(label="d1_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN),

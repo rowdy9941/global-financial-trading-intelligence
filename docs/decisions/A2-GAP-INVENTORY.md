@@ -573,6 +573,57 @@ counted — not silent.
 29. Version every payload (invariant R6): `{"v":1, ...}`, reject unknown versions.
 30. Gate: stream count > 0, replay a stream and get identical decisions.
 
+**Delivered 2026-11-06.** Both halves of the item were missing for the same reason: D2 was a
+*claim*. The stack ran `nats-server -js`, so `/jsz` answered `"streams": 0` while the docs said D2
+retained the bus, and no payload carried a version while six namespaces were documented as existing.
+
+Streams and durables are now **data in `configs/gfti.toml [d2]`** (6 streams: MARKET/SIGNAL/ORDER/
+RISK/LEDGER/SEAT, `file` storage, `max_age_s` 86400 for market/signal and 604800 for the decision
+and money streams; 2 durables: `cell-market` on MARKET, `e7-order` on ORDER) and `python/gfti/d2.py`
+applies them — `gfti d2 apply|status` is the 15th verb. Why the declaration belongs in the config
+rather than in Python: a stream the code creates is invisible to the operator, and A-4 had already
+made this file the only source for non-secrets. `[d2]` is structured data, so it is the one section
+outside the sparse `SCHEMA` and it validates itself in `d2.declarations` (upper-case unique names,
+non-empty subjects, a consumer must name a declared stream).
+
+Three design decisions worth recording:
+
+- **`rail::payload` is the single versioned codec** (invariant R6) for `tick|intent|signal|risk|fill|
+  seat`, all `{"v":1,"kind":…,…}`, strict in both directions: no duplicate fields, no unknown fields,
+  no unknown version, no unknown kind. `exec::intent_payload` now *delegates* to it instead of
+  defining a second wire format — two definitions of one contract is the same defect as two config
+  files, and it had already put E7's parser on a format the cell could drift from.
+- **Durables use `deliver_policy=new`**, not `all`: an engine must not replay yesterday's market data
+  into a live decision at boot. Historical replay is an explicit, ephemeral read (`d2.fetch`), never
+  a side effect of starting a service.
+- **The FANOUT bench moved out of `market.>`** to `bench.market.spot.*`. Once a MARKET stream declared
+  `market.>`, the 20,000 synthetic rows of every FANOUT run were written into the durable store
+  (`/jsz` messages 565 → 40,565 across two attempts) and made `gfti d2 status` message counts
+  meaningless. This is A0's existing rule — *a gate must not share a subject space with a live
+  service* — applied to a service that had just started existing.
+
+Two real defects were found by running the gate, not by reasoning about it:
+
+- **A bounded run could hang forever.** `CELL_TICKS=N` counted only *accepted* payloads, so with 2 of
+  5 messages refused the loop waited for ticks that would never arrive (measured: VERSION timed out
+  after 90 s). It is now bounded by messages *seen*.
+- **A subscriber was billing its parser to the bus.** `rail_sub` stamped its clock *after* decoding,
+  so the transit it reported included its own JSON parse. Stamped before decode now; a measurement
+  must not include the instrument.
+
+Evidence (verbatim):
+`SUMMARY {"CONSUMERS": true, "REPLAY": true, "STREAMS": true, "VERSION": true, "ok": true}`
+· `D2-STREAMS ok   6 declared streams exist on the server (/jsz streams=6); 6/6 publisher namespaces captured (market→MARKET, signal→SIGNAL, order→ORDER, risk→RISK, ledger→LEDGER, seat→SEAT); an undeclared namespace does not resolve`
+· `D2-VERSION ok   cell refused 2×v2 and accepted 3×v1 on market.bench.<RUN>.version`
+· `D2-REPLAY ok   60 retained messages read twice identically; cell decided 8× on each pass with identical (sma, verdict, side, qty) and differing timing`
+· `D2-CONSUMERS ok   cell-market on MARKET received a message published to its filter (pending 185→186), recreated cleanly (pending 0, consumers applied 2)`
+· `gfti d2 apply` is convergent: an existing stream is compared on its *declared* keys only
+  (`name, subjects, retention, max_age, storage`) and updated, so a config change lands instead of
+  being ignored because "the stream exists"; a durable whose `deliver_policy` changed is deleted and
+  recreated, because the server answers `deliver policy can not be updated`.
+· codec cost, measured with a micro-benchmark rather than assumed: **encode 0.83 µs/msg, decode
+  3.36 µs/msg** (112-byte tick, release build) vs 0.41 µs for the old `split_whitespace`.
+
 **A-9 · D1 and D6 become defined stores**
 31. Rail writes a real live table to QuestDB (`ticks`, `bars`), not just `gate_*`.
 32. D6 becomes an explicit, read-only materialization step (a `gfti research build` that produces a
@@ -673,7 +724,24 @@ counted — not silent.
 | B4 | cTrader production limits (O8, demo vs live) | FX Team 1/2 sizing |
 | B5 | Hyperliquid FIU-IND/FEMA/tax position (O11) | any HL order path |
 | B6 | DSR certification reference (no test vectors exist anywhere in the repo) | promotion beyond WF |
-| B7 | FANOUT p99 budget on a 4-core box (1.52–2.50 ms vs 2.00 ms) — needs a re-baseline decision | G-RAIL stability |
+| B7 | FANOUT p99 budget on a 4-core box — **owner re-baseline decision, not a code defect** (see below) | G-RAIL stability |
+
+B7 evidence gathered 2026-11-06 while closing A-8, because A-8 was the first change that could
+plausibly have moved this pin and it had to be cleared or named:
+
+- **D2 persistence is not the cause.** A controlled A/B/A/B (MARKET stream present vs deleted,
+  alternating so load drift is not attributed to the store) gave captured `3.51 / 1.93 ms` and
+  `1.98 ms`, uncaptured `1.93 ms` and `2.07 / 1.72 ms`. Uncapped runs crossed 2 ms too.
+- **The codec is not the cause.** 3.36 µs/msg decode cannot produce a ~400 µs p50 or a 2 ms p99.
+- **Capacity is the cause.** Same binaries: `1.85–1.98 ms` best-of-N at load1 ≤ 4; `2.08 / 2.09 /
+  2.14 ms` (3/3 fail) immediately after `d1_gates.py ALL` (ten QuestDB restarts) at load1 4.95; and
+  `1.93 ms` on attempt 1 with the three idle hot-path containers stopped. The floor on this host has
+  drifted from the recorded 1.50–1.60 ms (2026-11-04) to ~1.85–1.95 ms — about 5% of headroom left
+  under a 2.00 ms budget.
+- The gate now **settles load (bounded 120 s) and runs a reported-but-unscored warm-up pass**, so it
+  stops inheriting contention it did not create and stops scoring page-cache/governor ramp. The
+  **2.00 ms budget itself is unchanged** — `docs/gates/STATUS.md` records that relaxing it is an
+  owner decision, and that is where this now stands.
 
 ---
 

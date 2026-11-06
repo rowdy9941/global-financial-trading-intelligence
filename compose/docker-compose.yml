@@ -142,6 +142,12 @@ services:
       # configs/gfti.toml [subjects].intent, so a publisher and its subscriber
       # cannot drift apart (A2 item 15).
       CELL_INTENT_PREFIX: ${CELL_INTENT_PREFIX:?}
+      # A-8 item 28: the cell's own signal/verdict/seat namespaces. Declared streams
+      # in configs/gfti.toml [d2] capture them; a name published with no stream is
+      # a message nobody stores, which `d2_gates.py` STREAMS checks.
+      CELL_SIGNAL_PREFIX: ${CELL_SIGNAL_PREFIX:?}
+      CELL_RISK_PREFIX: ${CELL_RISK_PREFIX:?}
+      CELL_SEAT_PREFIX: ${CELL_SEAT_PREFIX:?}
       CELL_DECIDE_EVERY: ${CELL_DECIDE_EVERY:?}
       CELL_MAX_QTY: ${CELL_MAX_QTY:?}
       KILL_REFRESH_MS: ${KILL_REFRESH_MS:?}
@@ -156,6 +162,7 @@ services:
       HEARTBEAT_MS: ${HEARTBEAT_MS:?}
       HEARTBEAT_FILE: /run/gfti/hb/e7.json
       E7_SUBJECT: ${E7_SUBJECT:?}
+      E7_LEDGER_PREFIX: ${E7_LEDGER_PREFIX:?}
       E7_EXPECT: ${E7_EXPECT:?}
       # a resident ledger cell refuses and continues; exiting 7 is the W0b drill pin
       E7_REFUSE_EXIT: ${E7_REFUSE_EXIT:?}

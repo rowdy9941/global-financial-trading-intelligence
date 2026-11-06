@@ -36,8 +36,87 @@ market = "market.spot"
 # -> CELL_INTENT_PREFIX (cell publishes) AND E7_SUBJECT = "<intent>.>"
 #    One value, two services: a publisher and its subscriber cannot drift apart.
 intent = "order.spot"
+# A-8 item 28 — the three namespaces the cell and E7 publish besides `order`.
+# Each has exactly one publisher and one declared stream (see [d2] below); the
+# stream's subject pattern is what makes "this is stored" true rather than assumed.
+# -> CELL_SIGNAL_PREFIX (cell publishes its E2 signal)
+signal = "signal.spot"
+# -> CELL_RISK_PREFIX (cell publishes its E5 verdict)
+risk = "risk.spot"
+# -> E7_LEDGER_PREFIX (E7 publishes its signed fill)
+ledger = "ledger"
+# -> CELL_SEAT_PREFIX (cell publishes seat up/down)
+seat = "seat"
 # -> KILL_REFRESH_MS on cell (how often the kill ladder is re-read)
 kill_refresh_ms = 250
+
+[d2]
+# JetStream stream declarations (A-8 item 27). This table is the only definition of
+# what D2 retains: `gfti d2 apply` creates exactly these streams from this file, and
+# `d2_gates.py` proves both directions — every declared stream exists, and the
+# market namespace a live publisher writes is captured by one of them.
+#
+# Why `file` storage and not `memory`: a store that empties on restart cannot
+# replay an incident, which is the whole reason D2 is separate from D1.
+# `max_age_s` is a bound, not a promise of capacity; JetStream enforces both.
+[[d2.streams]]
+name = "MARKET"
+subjects = ["market.>"]
+max_age_s = 86400
+storage = "file"
+retention = "limits"
+
+[[d2.streams]]
+name = "SIGNAL"
+subjects = ["signal.>"]
+max_age_s = 86400
+storage = "file"
+retention = "limits"
+
+[[d2.streams]]
+name = "ORDER"
+subjects = ["order.>"]
+max_age_s = 604800
+storage = "file"
+retention = "limits"
+
+[[d2.streams]]
+name = "RISK"
+subjects = ["risk.>"]
+max_age_s = 604800
+storage = "file"
+retention = "limits"
+
+[[d2.streams]]
+name = "LEDGER"
+subjects = ["ledger.>"]
+max_age_s = 604800
+storage = "file"
+retention = "limits"
+
+[[d2.streams]]
+name = "SEAT"
+subjects = ["seat.>"]
+max_age_s = 604800
+storage = "file"
+retention = "limits"
+
+# One durable consumer per engine that reads a stream. A declared durable with no
+# reader is theatre, so `d2_gates.py` REPLAY consumes through these names and
+# `gfti d2 status` reports the delivered/pending counters instead of "exists".
+[[d2.consumers]]
+stream = "MARKET"
+name = "cell-market"
+filter = "market.>"
+max_deliver = 100000
+ack_wait_s = 30
+
+[[d2.consumers]]
+stream = "ORDER"
+name = "e7-order"
+filter = "order.>"
+max_deliver = 100000
+ack_wait_s = 30
 
 [runtime]
 # -> RAIL_TICK_MS (idle poll, also the worst-case SIGTERM latency for rail)

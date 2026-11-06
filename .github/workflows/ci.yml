@@ -59,7 +59,8 @@ jobs:
         run: |
           (cd python/train && uv run pytest -q ../gates/test_status.py)
           uvx ruff check python/gates/status.py python/gates/test_status.py python/gates/tier_gates.py \
-            python/gates/r1_gates.py --output-format concise
+            python/gates/r1_gates.py python/gates/d2_gates.py python/gfti/d2.py \
+            --output-format concise
       - name: cross-OS install contract (A-6)
         # POSIX parses under dash on this runner and the bare-PATH run proves the
         # installer names every missing tool at once; CIOS proves the workflow
