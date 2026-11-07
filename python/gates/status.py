@@ -624,6 +624,14 @@ def build(full: bool, install: bool) -> list[Gate]:
         6, "G-RESEARCH", "CPCV/DSR fail-closed · training lock · artifact negatives"
     )
     g6.parts = [gate_runner("w1_gates.py", parser=W1)]
+    # A-9: D6 is a product, not an idiom — one builder, atomic replace, one writer,
+    # read-only by construction. BUILD/LOCK/READONLY are three claims about a file,
+    # so each one is measured on a fixture lake rather than asserted in prose.
+    g6.parts.append(
+        gate_runner("d6_gates.py")
+        if full
+        else Part(label="d6_gates.py ALL", ok=False, unrun=True, detail=NOT_RUN)
+    )
 
     g7 = Gate(
         7, "G-PILOT-E2E", "fixture spine, then real-registered spine, deterministic"

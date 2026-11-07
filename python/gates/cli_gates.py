@@ -50,6 +50,9 @@ CORE_VERBS = (
     "config",
     # A-8: D2 is applied and inspected through the one front door, not by hand.
     "d2",
+    # A-9: same rule for the D1 store — the declared schema is applied, not
+    # created by whatever the first ILP row happened to look like.
+    "d1",
     "verify",
     "ingest",
     "research",

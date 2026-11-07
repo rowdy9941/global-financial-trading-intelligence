@@ -13,3 +13,7 @@ python/collect/.venv/
 
 # D5 dev-gate artifact outputs (regenerable; d5.artifacts table = audit index)
 /d5/
+
+# D6 research cache (A-9): rebuilt from D0 by `gfti research build`; 169 MB for
+# today's lake. A committed copy would be a second, silently stale source of truth.
+/d6/

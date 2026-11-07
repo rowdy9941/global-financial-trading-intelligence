@@ -25,6 +25,50 @@ const DEFAULT_NATS: &str = "nats://127.0.0.1:4222";
 const DEFAULT_TICK_MS: u64 = 200;
 const DEFAULT_MARKET_PREFIX: &str = "market.spot";
 
+/// The D1 sink (A2 A-9 item 31). `RAIL_D1_URL` is `host:port` of QuestDB's ILP-TCP
+/// socket. It has **no default on purpose**: a hardcoded store address inside the
+/// binary would be the second source of truth A-4 deleted, and an unset value is
+/// answered loudly instead (`D1 sink OFF`), never assumed.
+///
+/// Why it is allowed to be off at all: a measurement must not write into the store
+/// it is measuring. FANOUT (and the r1/rt/w1 drills) drive this binary with a
+/// synthetic feed; leaving the URL unset keeps 20,000 synthetic rows out of the live
+/// `ticks` table — the same rule A0 applies to subject namespaces. The compose
+/// runtime always sets it, so the shipped path always writes D1.
+fn d1_sink() -> Option<rail::ilp::Sink> {
+    let url = match std::env::var("RAIL_D1_URL") {
+        Ok(v) if !v.is_empty() => v,
+        _ => {
+            eprintln!(
+                "rail: D1 sink OFF (RAIL_D1_URL unset) — ticks are published but NOT stored in D1"
+            );
+            return None;
+        }
+    };
+    match rail::ilp::Sink::connect(&url) {
+        Ok(s) => {
+            eprintln!("rail: D1 sink → {url} table {}", rail::ilp::LIVE_TABLE);
+            Some(s)
+        }
+        Err(e) => {
+            // Fail-closed: ingesting with no store is the failure mode A-9 exists to
+            // remove, so this is the same rule as an unreachable bus.
+            eprintln!("rail: FAIL-CLOSED — cannot reach D1 {url}: {e}");
+            std::process::exit(2);
+        }
+    }
+}
+
+/// Write whatever is staged. An error is loud and already counted by the sink;
+/// the loop continues because the row is published to the bus, and losing that
+/// too would turn a store outage into a data outage.
+fn flush_d1(sink: &mut rail::ilp::Sink) {
+    match sink.flush() {
+        Ok(_) => {}
+        Err(e) => eprintln!("rail: D1 flush failed ({e}) — batch counted as failed, not stored"),
+    }
+}
+
 /// The publish namespace. One config value (`[subjects].market`) reaches both the
 /// publisher here and the subscriber (`CELL_SUBJECT`), so they cannot drift; the
 /// bench uses the same knob to publish into a namespace no live service consumes,
@@ -135,6 +179,9 @@ fn main() {
     let mut rejected: u32 = 0;
     let mut by_symbol: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     let tick = Duration::from_millis(tick_ms);
+    // A-9: connected *before* the first row is read, so a store that is down is a
+    // startup failure rather than 10,000 rows that turn out to have gone nowhere.
+    let mut d1 = d1_sink();
 
     loop {
         // Once a stop is requested we stop waiting and only drain.
@@ -145,7 +192,13 @@ fn main() {
         } else {
             match rx.recv_timeout(tick) {
                 Ok(m) => Some(m),
-                Err(RecvTimeoutError::Timeout) => continue, // heartbeat / signal check
+                Err(RecvTimeoutError::Timeout) => {
+                    // Idle tick: the only moment a slow feed's staged batch is due.
+                    if let Some(s) = d1.as_mut() {
+                        flush_d1(s);
+                    }
+                    continue;
+                }
                 Err(RecvTimeoutError::Disconnected) => None,
             }
         };
@@ -207,6 +260,15 @@ fn main() {
                         accepted += 1;
                         *by_symbol.entry(r.symbol.to_string()).or_insert(0) += 1;
                         hb.bump_events();
+                        // The publish ack is the bus's proof; the store write is
+                        // batched, so an accepted row is not yet a stored row. The
+                        // receipt reports both numbers instead of implying one.
+                        if let Some(s) = d1.as_mut() {
+                            s.push(&r.symbol, r.ts_nanos, r.arrival_nanos, r.price);
+                            if s.due() {
+                                flush_d1(s);
+                            }
+                        }
                     }
                     Err(e) => {
                         emit(&format!("ERR publish-fail({e}) — not stamped live"));
@@ -226,6 +288,16 @@ fn main() {
     } else {
         "eof"
     };
+    // Anything still staged is real data: flush it before the summary, or a short
+    // feed (< one batch) would publish to D2 and store nothing in D1.
+    if let Some(s) = d1.as_mut() {
+        flush_d1(s);
+    }
+    let d1_receipt = match &d1 {
+        Some(s) => Some(s.receipt()),
+        None => None,
+    };
+    let d1_failed = d1.as_ref().map(|s| s.failed()).unwrap_or(0);
     // A-7: the machine-readable ingest receipt. `d0_dump` cannot produce this — it
     // only sees the rows that survived — so the counts that a D3 provenance row
     // must carry (accepted *and* rejected) come from here, on stdout, framed.
@@ -238,10 +310,16 @@ fn main() {
         None => "\"file\":null".to_string(),
     };
     emit(&format!(
-        "RAIL-INGEST {{\"accepted\":{accepted},\"rejected\":{rejected},\"stopped\":\"{stopped}\",{source},\"by_symbol\":{{{}}}}}",
-        symbols.join(",")
+        "RAIL-INGEST {{\"accepted\":{accepted},\"rejected\":{rejected},\"stopped\":\"{stopped}\",{source},\"by_symbol\":{{{}}},\"d1\":{}}}",
+        symbols.join(","),
+        d1_receipt.as_deref().unwrap_or("null")
     ));
     eprintln!(
         "RAIL-SUMMARY {{\"accepted\":{accepted},\"rejected\":{rejected},\"stopped\":\"{stopped}\"}}"
     );
+    // A store that lost rows is a failed ingest, not a successful one with a note.
+    if d1_failed > 0 {
+        eprintln!("rail: {d1_failed} row(s) were published but not stored in D1");
+        std::process::exit(1);
+    }
 }

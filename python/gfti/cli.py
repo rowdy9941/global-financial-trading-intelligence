@@ -604,6 +604,37 @@ def cmd_doctor(args) -> int:
                     "0 undeclared",
                 )
 
+    # A-9: the declared D1 store. `ticks` is created by `gfti d1 apply` (and by
+    # `gfti up`, before any engine starts), so "the table is missing" and "the
+    # table does not match its declaration" are both operator-visible here rather
+    # than discovered by a query that returns nothing.
+    if cfg is not None and port_open(cfg["stores"]["questdb_http_port"]):
+        try:
+            import d1 as d1mod
+        except ImportError:  # pragma: no cover - package import path
+            from . import d1 as d1mod
+        try:
+            shape = d1mod.status(cfg)
+        except (d1mod.D1Error, OSError) as e:
+            add("d1_schema", "fail", f"D1 unreachable: {e}")
+        else:
+            live = shape["tables"].get("ticks", {})
+            if shape["ok"]:
+                add(
+                    "d1_schema",
+                    "ok",
+                    f"ticks rows={live.get('rows')} ts={live.get('designated')} "
+                    f"partition={live.get('partition_by')} (declared)",
+                )
+            else:
+                add(
+                    "d1_schema",
+                    "fail",
+                    "; ".join(shape["problems"])[:200] + " — run `gfti d1 apply`",
+                )
+    else:
+        add("d1_schema", "skip", "questdb not running", hard=False)
+
     failed = [c for c in checks if c["status"] == "fail"]
     warned = [c for c in checks if c["status"] == "warn"]
     ok = not failed and not (args.strict and warned)
@@ -678,6 +709,33 @@ def cmd_up(args) -> int:
     if not reachable:
         say(f"gfti up: docker daemon unreachable — {detail}")
         return EXIT_ENV
+    # Two phases, and the order is the point (A-9). Phase 1 brings up the stores;
+    # phase 2 applies the *declared* schemas to them (D1 `ticks`, D2 streams) before
+    # any hot-path service exists. One phase would race: `rail` starts with the store
+    # and QuestDB would auto-create `ticks` from the first ILP line, giving the live
+    # table a designated timestamp called `timestamp` — technically a table, and not
+    # the one this repo says it has.
+    stores = compose("up", "-d", "--wait", "postgres", "questdb", "nats", capture=False)
+    if stores.rc != 0:
+        say("gfti up: the stores failed to start — `gfti logs` explains why")
+        return EXIT_FAIL
+    if not args.stores_only:
+        for verb, module in (("d1", "d1"), ("d2", "d2")):
+            try:
+                mod = __import__(module)
+            except ImportError:  # pragma: no cover - package import path
+                mod = getattr(__import__(f".{module}", fromlist=[module]), module)
+            try:
+                out = mod.apply(gcfg.load())
+            except (gcfg.ConfigError, OSError, RuntimeError) as e:
+                say(f"gfti up: {verb} apply failed — {e}")
+                return EXIT_FAIL
+            if not out.get("ok"):
+                say(f"gfti up: {verb} schema drift — refusing to start engines on it:")
+                for problem in out.get("problems", []):
+                    say(f"  {problem}")
+                return EXIT_FAIL
+            say(f"gfti up: {verb} applied ({len(out.get('created', []))} created)")
     argv = ["up", "-d", "--wait"]
     if args.build:
         argv.append("--build")
@@ -1086,6 +1144,55 @@ def cmd_d2(args) -> int:
     return EXIT_OK if out["ok"] else EXIT_FAIL
 
 
+def cmd_d1(args) -> int:
+    """D1 = QuestDB, declared and read back (A2 A-9 item 31).
+
+    The asymmetry with `d2` is deliberate and identical: `apply` makes the server
+    match `python/gfti/d1.py`, `status` reports what the server actually holds.
+    A table that exists with the wrong designated timestamp is drift, not success —
+    so it is reported and the verb exits non-zero rather than printing a green line.
+    """
+    try:  # same dual import shape as d2 above
+        import d1
+    except ImportError:  # pragma: no cover - package import path
+        from . import d1
+
+    try:
+        cfg = gcfg.load()
+        out = d1.apply(cfg) if args.action == "apply" else d1.status(cfg)
+    except (gcfg.ConfigError, d1.D1Error, OSError) as e:
+        say(f"gfti d1 {args.action}: {e}")
+        return EXIT_ENV
+
+    if args.json:
+        _json_out(out)
+        return EXIT_OK if out.get("ok") else EXIT_FAIL
+
+    if args.action == "apply":
+        say(
+            f"D1 apply: {len(out['created'])} created, "
+            f"{len(out['present'])} already present"
+        )
+        say("declared: " + ", ".join(out["declared"]))
+        for problem in out["problems"]:
+            say(f"drift: {problem}")
+        return EXIT_OK if out["ok"] else EXIT_FAIL
+
+    for name, info in out["tables"].items():
+        if not info.get("exists"):
+            say(f"{name:<12}MISSING")
+            continue
+        cols = ",".join(f"{c}:{t}" for c, t in info["columns"])
+        say(
+            f"{name:<12}rows={info['rows']:<10} ts={info['designated']} "
+            f"partition={info['partition_by']} wal={info['wal']}"
+        )
+        say(f"{'':<12}{cols}")
+    for problem in out["problems"]:
+        say(f"problem: {problem}")
+    return EXIT_OK if out["ok"] else EXIT_FAIL
+
+
 def cmd_ingest(args) -> int:
     available = collectors()
     if args.source not in available:
@@ -1107,8 +1214,33 @@ def cmd_ingest(args) -> int:
 
 
 def cmd_research(args) -> int:
+    if args.action == "build":
+        out = args.out or str(REPO / "d6" / "gfti.duckdb")
+        argv = [
+            "uv",
+            "run",
+            "--project",
+            str(REPO / "python" / "train"),
+            "python3",
+            str(REPO / "python" / "train" / "d6_build.py"),
+            "--out",
+            out,
+        ]
+        for dataset in args.dataset or ():
+            argv += ["--dataset", dataset]
+        say(f"gfti research build: D0 → D6 {out}")
+        r = sh(argv, cwd=REPO / "python" / "train", capture=False)
+        return EXIT_OK if r.rc == 0 else EXIT_FAIL
+
+    # walk-forward (default): exactly one dataset, because a fold split is defined
+    # per series and silently averaging two series would be a different experiment.
+    chosen = list(args.dataset or [])
+    if len(chosen) > 1:
+        say("gfti research: --dataset takes one series for walk-forward (use `build` for many)")
+        return EXIT_FAIL
+    dataset = chosen[0] if chosen else "hyperliquid/BTC-USD/1d"
     out = args.out or str(
-        REPO / "d5" / f"research-{args.dataset.replace('/', '_')}.json"
+        REPO / "d5" / f"research-{dataset.replace('/', '_')}.json"
     )
     argv = [
         "uv",
@@ -1118,13 +1250,13 @@ def cmd_research(args) -> int:
         "python3",
         str(REPO / "python" / "train" / "walk_forward.py"),
         "--dataset",
-        args.dataset,
+        dataset,
         "--folds",
         str(args.folds),
         "--out",
         out,
     ]
-    say(f"gfti research: {args.dataset} · {args.folds} folds → {out}")
+    say(f"gfti research: {dataset} · {args.folds} folds → {out}")
     return sh(argv, cwd=REPO / "python" / "train", capture=False).rc
 
 
@@ -1321,6 +1453,13 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_d2)
 
+    s = sub.add_parser(
+        "d1", help="QuestDB: apply the declared schema, read it back"
+    )
+    s.add_argument("action", choices=["apply", "status"])
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_d1)
+
     s = sub.add_parser("ingest", help="WORKFLOW 1 — run a collector")
     s.add_argument("source", help="collector name, e.g. hyperliquid_daily")
     s.add_argument(
@@ -1329,9 +1468,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_ingest)
 
     s = sub.add_parser(
-        "research", help="WORKFLOW 2/5 — walk-forward + DSR on a D3 dataset"
+        "research",
+        help="WORKFLOW 2/5 — walk-forward + DSR, or `build` the D6 research cache",
     )
-    s.add_argument("--dataset", default="hyperliquid/BTC-USD/1d")
+    s.add_argument(
+        "action",
+        nargs="?",
+        default="walk-forward",
+        choices=["walk-forward", "build"],
+        help="walk-forward (default) or build the D6 DuckDB cache from D0",
+    )
+    s.add_argument(
+        "--dataset",
+        action="append",
+        help="D0 path: one series for walk-forward, repeatable filters for build",
+    )
     s.add_argument("--folds", type=int, default=4)
     s.add_argument("--out", help="artifact path (default d5/research-<dataset>.json)")
     s.set_defaults(fn=cmd_research)

@@ -30,6 +30,8 @@ x-runtime-service: &runtime-service
       condition: service_healthy
     nats:
       condition: service_healthy
+    questdb:
+      condition: service_healthy
   environment:
     # service-to-service names inside the compose network, never 127.0.0.1
     LEDGER_URL: postgres://${POSTGRES_USER:?}:${POSTGRES_PASSWORD:?set in .env (dev local, see .env.example)}@postgres:5432/${POSTGRES_DB:?}
@@ -124,6 +126,9 @@ services:
       # Publisher side of `[subjects].market`: one value in the config feeds the
       # publisher here and the subscriber below (CELL_SUBJECT), so they cannot drift.
       MARKET_PREFIX: ${MARKET_PREFIX:?}
+      # A-9: the D1 sink. Present here and absent in every gate's native run, which
+      # is the difference between a live ingest and a measurement.
+      RAIL_D1_URL: ${RAIL_D1_URL:?}
 
   cell:
     <<: *runtime-service

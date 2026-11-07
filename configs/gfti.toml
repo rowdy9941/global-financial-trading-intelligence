@@ -29,6 +29,12 @@ nats_monitor_port = 8222
 nats_url = "nats://nats:4222"
 # -> `gfti doctor` connectivity probe and the gate harnesses (from the host)
 nats_url_host = "nats://127.0.0.1:4222"
+# -> rail's `RAIL_D1_URL`: the D1 sink (A-9). `host:port` of the ILP-TCP socket as
+#    seen from inside the compose network. The rail refuses to start if it cannot
+#    connect, so a typo here is a startup failure, not a silent "published but not
+#    stored". Gates drive the same binary natively and leave it unset on purpose:
+#    a measurement must not write synthetic rows into the live store.
+questdb_ilp_url = "questdb:9009"
 
 [subjects]
 # -> `CELL_SUBJECT` is `<market>.<runtime.cell.symbol>`

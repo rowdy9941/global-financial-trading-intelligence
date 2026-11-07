@@ -10,10 +10,12 @@ gate doc pastes them unchanged.
   C pre-warm     — after restart: first-query (cold) ms vs warm p50/p99
   D restore      — snapshot volume, append markers, restore, verify reversal
   E 10x restart  — restart x10, after each: healthy + invariant row count
+  F live (A-9)   — the declared `ticks` table, written by the shipped rail
 
-Usage: python3 python/gates/d1_gates.py A|B|C|D|E|ALL
+Usage: python3 python/gates/d1_gates.py A|B|C|D|E|F|ALL
 """
 
+import calendar
 import json
 import subprocess
 import sys
@@ -328,8 +330,150 @@ def gate_e():
     return ok
 
 
-GATES = {"A": gate_a, "B": gate_b, "C": gate_c, "D": gate_d, "E": gate_e}
+def gate_f():
+    """A-9 LIVE: the *declared* store, written by the *production* rail.
 
+    Cases A–E prove QuestDB can be written and survive; they say nothing about
+    whether the live table exists, has the shape the repo declares, or receives a
+    real tick. This case drives the shipped binary with the shipped sink:
+
+    1. `d1.apply` twice — the declaration converges, and the second run must not
+       recreate anything (a re-run that "creates" again means the check is fake).
+    2. `rail` with `RAIL_D1_URL` set, a fresh row block → its own receipt says how
+       many rows it stored, and the server must agree (count delta, not a total:
+       the table is shared with every earlier run).
+    3. the designated timestamp `ts` must be the row's own time. This is the pin
+       that catches the framing bug A-9 found: the ILP wire unit is nanoseconds, so
+       a micros frame stores every row 56 years in the past while `ts_nanos` looks
+       perfectly correct.
+    """
+    sys.path.insert(0, str(REPO / "python" / "gfti"))
+    import d1
+    import gfti_config
+
+    cfg = gfti_config.load()
+    first = d1.apply(cfg)
+    second = d1.apply(cfg)
+    convergent = second["ok"] and not second["created"] and "ticks" in second["present"]
+
+    sym = "GATE_LIVE"
+    rows = 300
+    base = time.time_ns()
+    feed = SCRATCH / "d1_live_feed.tsv"
+    feed.write_text(
+        "".join(f"{sym} {base + i * 1_000_000} {100.0 + i / 10} public\n" for i in range(rows))
+    )
+    before = stable_count_where(sym)
+
+    ilp = CFG_ENV.get("QUESTDB_ILP_PORT", "9009")
+    env = dict(
+        CFG_ENV,
+        RAIL_D1_URL=f"127.0.0.1:{ilp}",
+        RAIL_NATS_URL=CFG_ENV.get("NATS_URL_HOST", "nats://127.0.0.1:4222"),
+        RAIL_TICK_MS="100",
+        MARKET_PREFIX="market.bench.d1live",
+    )
+    r = subprocess.run(
+        [str(release_dir(REPO) / "rail"), "--ingest-file", str(feed)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env=env,
+        check=False,
+    )
+    receipt = {}
+    for line in r.stdout.splitlines():
+        if line.startswith("RAIL-INGEST "):
+            receipt = json.loads(line[len("RAIL-INGEST ") :])
+    stored = (receipt.get("d1") or {}).get("rows")
+    failed = (receipt.get("d1") or {}).get("failed")
+
+    after = stable_count_where(sym)
+    delta = after - before
+    # one query so the min row is the same row on both sides of the comparison
+    got = qd(
+        "select min(ts_nanos), min(ts) from ticks "
+        f"where symbol='{sym}' and ts_nanos >= {base}"
+    )
+    ts_ok = False
+    skew_ms = None
+    if got and got[0][0] is not None:
+        want_us = got[0][0] / 1000.0
+        wire_us = _epoch_us(got[0][1])
+        skew_ms = None if wire_us is None else round((wire_us - want_us) / 1000.0, 3)
+        ts_ok = skew_ms is not None and abs(skew_ms) <= 1.0
+
+    status = d1.status(cfg)
+    live = status.get("tables", {}).get("ticks", {})
+    ok = (
+        convergent
+        and r.returncode == 0
+        and receipt.get("accepted") == rows
+        and stored == rows
+        and not failed
+        and delta == rows
+        and ts_ok
+        and status.get("ok") is True
+        and live.get("designated") == "ts"
+        and live.get("rows", 0) >= rows
+    )
+    print(
+        "GATE-F-LIVE "
+        + json.dumps(
+            {
+                "declared_apply_created": first["created"],
+                "reapply_created": second["created"],
+                "convergent": convergent,
+                "rail_rc": r.returncode,
+                "accepted": receipt.get("accepted"),
+                "d1_rows_reported": stored,
+                "d1_rows_failed": failed,
+                "rows_delta_server": delta,
+                "designated_ts_skew_ms": skew_ms,
+                "status_rows": live.get("rows"),
+                "declared_designated": live.get("designated"),
+                "problems": status.get("problems"),
+                "ok": ok,
+            }
+        )
+    )
+    return ok
+
+
+def _epoch_us(text):
+    """`2026-11-06T12:00:00.123456Z` → epoch microseconds, or None.
+
+    `strptime(...%f)` parses the fraction into a `struct_time` field, but
+    `calendar.timegm` only reads whole seconds — a silent 0.4 s error that a
+    1 ms tolerance does not forgive (caught by this gate on its first run).
+    """
+    try:
+        stamp, frac = str(text).rstrip("Z").split(".")
+    except (AttributeError, ValueError):
+        return None
+    try:
+        t = time.strptime(stamp, "%Y-%m-%dT%H:%M:%S")
+        frac_us = int((frac + "000000")[:6])
+    except ValueError:
+        return None
+    return calendar.timegm(t) * 1_000_000 + frac_us
+
+
+def stable_count_where(symbol):
+    """Row count for one symbol until it stops changing (WAL apply is async)."""
+    prev, stable = -1, 0
+    while stable < 3:
+        c = qd(f"select count() from ticks where symbol='{symbol}'")
+        cur = c[0][0] if c else 0
+        if cur == prev:
+            stable += 1
+        else:
+            stable, prev = 0, cur
+        time.sleep(0.5)
+    return prev
+
+
+GATES = {"A": gate_a, "B": gate_b, "C": gate_c, "D": gate_d, "E": gate_e, "F": gate_f}
 if __name__ == "__main__":
     which = sys.argv[1].upper() if len(sys.argv) > 1 else "ALL"
     todo = GATES if which == "ALL" else {which: GATES[which]}
